@@ -1,0 +1,30 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <ItemGroup>
+    <ProjectReference Include="..\Salmiak.Core\Salmiak.Core.csproj" />
+    <ProjectReference Include="..\Salmiak.Rendering\Salmiak.Rendering.csproj" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="OpenTK.GLWpfControl" Version="4.3.6" />
+  </ItemGroup>
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+    <!-- Embeds Salmiak.ico into the .exe (File Explorer icon) and WPF auto-uses it for the
+         window title-bar and taskbar icon. Replace Salmiak.ico to change the app icon. -->
+    <ApplicationIcon>Salmiak.ico</ApplicationIcon>
+    <!-- App version (single source of truth). Drives AssemblyVersion/FileVersion + the .exe
+         Details tab; the window title reads it at runtime. Bump this to release. -->
+    <Version>0.1.1</Version>
+    <Product>Salmiak</Product>
+    <Company>Salmiak</Company>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
+  </PropertyGroup>
+
+</Project>

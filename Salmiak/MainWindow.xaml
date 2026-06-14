@@ -1,0 +1,188 @@
+<Window x:Class="Salmiak.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="Salmiak" Height="768" Width="1280"
+        Background="#1e1e1e" Foreground="White"
+        Closing="Window_Closing">
+
+    <Grid>
+    <DockPanel>
+
+        <Menu DockPanel.Dock="Top" Background="#2d2d2d" Foreground="White">
+            <MenuItem Header="_File" Foreground="White">
+                <MenuItem Header="_Set WoW Directory..." Click="SetWoWDirectory_Click" Foreground="Black" />
+                <MenuItem Header="MPQ _Archives..." Click="MpqArchives_Click" Foreground="Black" />
+                <MenuItem Header="_Database Connection..." Click="DatabaseConnection_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem Header="E_xit" Click="Exit_Click" Foreground="Black" />
+            </MenuItem>
+            <MenuItem Header="_Map" Foreground="White">
+                <MenuItem Header="_New Map..." Click="NewMap_Click" Foreground="Black" />
+                <MenuItem Header="_Open Map..." Click="OpenMap_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem Header="_Minimap" Click="Minimap_Click" Foreground="Black" InputGestureText="M" />
+                <Separator />
+                <MenuItem Header="Edit _WMO..." Click="EditWmo_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem x:Name="FlightPathsMenu" Header="_Taxi Mode (Taxi Paths &amp; Transports)" IsCheckable="True"
+                          Click="FlightPaths_Click" Foreground="Black" InputGestureText="B" />
+                <Separator />
+                <MenuItem Header="Zone _Lighting (Night)..." Click="ZoneLighting_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem Header="Bake _Shadows..." Click="BakeShadows_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem Header="Import _Heightmap..." Click="ImportHeightmap_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem Header="Add _Tile at Camera" Click="AddTile_Click" Foreground="Black"
+                          ToolTip="Add a blank tile at the camera position to extend the map." />
+            </MenuItem>
+            <MenuItem Header="_Project" Foreground="White">
+                <MenuItem Header="_Save Edits..." Click="SaveEdits_Click" Foreground="Black" />
+                <MenuItem Header="_Load Edits..." Click="LoadEdits_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem Header="_Export to MPQ..." Click="ExportMpq_Click" Foreground="Black" />
+                <MenuItem Header="Export Server _Maps..." Click="ExportServerMaps_Click" Foreground="Black"
+                          ToolTip="Write server .map files for the edited tiles." />
+                <MenuItem Header="Export _Taxi / Transports..." Click="ExportFlightPaths_Click" Foreground="Black"
+                          ToolTip="Export taxi/transport DBCs and SQL (Deploy does this for you)." />
+                <MenuItem Header="_Merge MPQs..." Click="MergeMpq_Click" Foreground="Black" />
+                <Separator />
+                <MenuItem Header="_Deploy..." Click="Deploy_Click" Foreground="Black" FontWeight="Bold"
+                          ToolTip="Merge the export into the client patch and copy server files in one step." />
+            </MenuItem>
+        </Menu>
+
+        <Border DockPanel.Dock="Top" Background="#2a2a2e" BorderBrush="#3a3a44" BorderThickness="0,0,0,1" Padding="4,3">
+            <DockPanel>
+                <TextBlock x:Name="ToolHud" DockPanel.Dock="Right" Foreground="#9cd9ff"
+                           VerticalAlignment="Center" Margin="10,0,4,0" FontSize="11" FontWeight="Bold" />
+                <StackPanel x:Name="ToolbarPanel" Orientation="Horizontal" />
+            </DockPanel>
+        </Border>
+
+        <Border x:Name="WmoEditBar" DockPanel.Dock="Top" Background="#3a2d10" BorderBrush="#7a5a1a"
+                BorderThickness="0,0,0,1" Padding="8,4" Visibility="Collapsed">
+            <DockPanel>
+                <StackPanel Orientation="Horizontal" DockPanel.Dock="Right">
+                    <TextBlock Text="Furniture set:" Foreground="#cdd6e0" VerticalAlignment="Center" Margin="0,0,4,0" />
+                    <ComboBox x:Name="WmoSetBox" Width="150" Margin="0,0,4,0"
+                              SelectionChanged="WmoSet_SelectionChanged" />
+                    <Button Content="+ Set" Click="WmoAddSet_Click" Padding="8,2" Margin="0,0,12,0"
+                            ToolTip="Add a new furniture set (variant) to this WMO" />
+                    <Button Content="Save &amp; Close" Click="WmoEditSave_Click" Padding="10,2" Margin="0,0,6,0" />
+                    <Button Content="Cancel" Click="WmoEditCancel_Click" Padding="10,2" />
+                </StackPanel>
+                <TextBlock x:Name="WmoEditLabel" Foreground="#ffd479" FontWeight="Bold" VerticalAlignment="Center"
+                           Text="WMO edit mode - place furniture (N), then Save &amp; Close" />
+            </DockPanel>
+        </Border>
+
+        <StatusBar DockPanel.Dock="Bottom" Background="#2d2d2d">
+            <StatusBarItem>
+                <StackPanel Orientation="Horizontal">
+                    <TextBlock x:Name="LoadingText" Foreground="#ffd479" FontWeight="Bold"
+                               Margin="0,0,10,0" Visibility="Collapsed" Text="Loading tiles..." />
+                    <TextBlock x:Name="StatusText" Foreground="White"
+                               Text="Ready - set your WoW directory first (File &gt; Set WoW Directory)" />
+                    <TextBlock x:Name="SpeedText" Foreground="#9cd9ff" FontWeight="Bold"
+                               Margin="16,0,0,0" Text="Speed: 100" />
+                </StackPanel>
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock x:Name="DebugText" Foreground="#ffd479" Margin="0,0,16,0"
+                           Text="View: Normal" />
+            </StatusBarItem>
+            <StatusBarItem HorizontalAlignment="Right">
+                <TextBlock x:Name="CamText" Foreground="#aaa" />
+            </StatusBarItem>
+        </StatusBar>
+
+        <Grid>
+            <Grid.ColumnDefinitions>
+                <ColumnDefinition Width="200" />
+                <ColumnDefinition Width="4" />
+                <ColumnDefinition Width="*" />
+            </Grid.ColumnDefinitions>
+
+            <Border Grid.Column="0" x:Name="SidePanel" Background="#252526" Padding="6">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <StackPanel>
+                    <TextBlock Text="Maps" Foreground="#aaa" FontSize="11" Margin="0,4,0,4" />
+                    <ListBox x:Name="MapList" Background="#1e1e1e" Foreground="White"
+                             BorderBrush="#555" MaxHeight="280"
+                             SelectionChanged="MapList_SelectionChanged" />
+                    <StackPanel x:Name="GoToPanel" Visibility="Collapsed">
+                        <Separator Margin="0,12" Background="#444" />
+                        <TextBlock Text="Go to" Foreground="#aaa" FontSize="11" Margin="0,0,0,4" />
+                        <ComboBox x:Name="GoToBox" Background="#1e1e1e" Foreground="Black"
+                                  SelectionChanged="GoTo_SelectionChanged" />
+                    </StackPanel>
+                </StackPanel>
+                </ScrollViewer>
+            </Border>
+
+            <GridSplitter Grid.Column="1" Width="4" Background="#555" HorizontalAlignment="Stretch" />
+
+            <Border Grid.Column="0" x:Name="DoodadDrawer" Background="#252526"
+                    Visibility="Collapsed" />
+
+            <Grid Grid.Column="2">
+                <Border x:Name="GlHost" />
+                <Grid IsHitTestVisible="False">
+                    <Rectangle x:Name="HudLoadingWash" Fill="#38848C8C" Visibility="Collapsed" />
+                    <TextBlock x:Name="HudLoading" Text="Loading tiles..." Visibility="Collapsed"
+                               HorizontalAlignment="Left" VerticalAlignment="Top" Margin="8"
+                               Background="#73000000" Padding="6,2" Foreground="#FFD959" FontWeight="Bold" />
+                    <StackPanel HorizontalAlignment="Center" VerticalAlignment="Top" Margin="60,8,60,0">
+                        <TextBlock x:Name="HudBanner" Visibility="Collapsed" HorizontalAlignment="Center"
+                                   Background="#8C000000" Padding="8,3" TextWrapping="Wrap" FontSize="14" />
+                        <TextBlock x:Name="HudBannerSub" Visibility="Collapsed" HorizontalAlignment="Center"
+                                   Background="#8C000000" Padding="8,2" Margin="0,4,0,0" FontSize="12.5" />
+                    </StackPanel>
+                    <TextBlock x:Name="HudLayers" Visibility="Collapsed"
+                               HorizontalAlignment="Right" VerticalAlignment="Top" Margin="8"
+                               Background="#80000000" Padding="8,4" Foreground="#D9FFD9"
+                               FontFamily="Consolas, Courier New" FontSize="12" />
+                    <Border x:Name="HudPaint" Visibility="Collapsed"
+                            HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8,0,0,42"
+                            Background="#80000000" Padding="6">
+                        <StackPanel Orientation="Horizontal">
+                            <Image x:Name="HudPaintImg" Width="56" Height="56" Margin="0,0,10,0" />
+                            <StackPanel VerticalAlignment="Center">
+                                <TextBlock x:Name="HudPaintName" Foreground="#FFF2B3" FontSize="13" />
+                                <TextBlock x:Name="HudPaintSub" Foreground="#CCCCD9" FontSize="11" Margin="0,2,0,0" />
+                            </StackPanel>
+                        </StackPanel>
+                    </Border>
+                    <TextBlock x:Name="HudHelp" Visibility="Collapsed"
+                               HorizontalAlignment="Center" VerticalAlignment="Bottom" Margin="120,0,120,8"
+                               Background="#73000000" Padding="10,4" Foreground="#CDD6E0" FontSize="12"
+                               TextAlignment="Center" TextWrapping="Wrap" />
+                    <TextBlock x:Name="HudCoords" Visibility="Collapsed"
+                               HorizontalAlignment="Left" VerticalAlignment="Bottom" Margin="8"
+                               Background="#80000000" Padding="6,2" Foreground="#9CD9FF" FontSize="12.5" />
+                    <TextBlock x:Name="HudStats" HorizontalAlignment="Right" VerticalAlignment="Bottom"
+                               Margin="8" Foreground="#B3D9B3" FontSize="11" Opacity="0.9" />
+                </Grid>
+            </Grid>
+        </Grid>
+    </DockPanel>
+
+    <Popup x:Name="HelpPopup" Placement="Center" PlacementTarget="{Binding ElementName=GlHost}"
+           AllowsTransparency="True" StaysOpen="True" PopupAnimation="Fade">
+        <Border Background="#f71b1b22" BorderBrush="#4a4a5a" BorderThickness="1" CornerRadius="6"
+                Padding="20,16" MaxWidth="900" MaxHeight="660" MouseDown="HelpOverlay_MouseDown">
+            <DockPanel>
+                <TextBlock DockPanel.Dock="Top" Text="Keyboard shortcuts" Foreground="White"
+                           FontSize="18" FontWeight="Bold" Margin="0,0,0,2" />
+                <TextBlock DockPanel.Dock="Top" Text="Press F1 or click to close" Foreground="#888"
+                           FontSize="11" Margin="0,0,0,10" />
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <TextBlock x:Name="HelpText" Foreground="#cdd6e0" FontSize="12.5"
+                               FontFamily="Consolas, Courier New" />
+                </ScrollViewer>
+            </DockPanel>
+        </Border>
+    </Popup>
+    </Grid>
+</Window>
