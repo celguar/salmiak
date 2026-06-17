@@ -81,7 +81,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: salmiak_editor_${{ github.sha }}
-          path: salmiak_editor.zip
+          path: Salmiak_Editor/salmiak_editor.zip
           if-no-files-found: error
 
   upload:
