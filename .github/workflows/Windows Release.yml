@@ -47,15 +47,36 @@ jobs:
         run:  |
           Remove-Item "publish\*.pdb"
 
-      - name: Prepare Editor
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: salmiak_${{ github.sha }}
+          path: publish/*
+          if-no-files-found: error
+          
+  add_editor:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    needs: build
+    
+    steps:
+    
+      - name: Download Salmiak
+        uses: actions/download-artifact@v4
+        with:
+          name: salmiak_${{ github.sha }}
+          path: editor
+          
+      - name: Prepare Folder
         run: |
           mkdir -m777 -p Salmiak_Editor
-          cp -r publish/* Salmiak_Editor
-
+          cp -r editor/* Salmiak_Editor
+          
       - name: Archive Editor
         run: zip -qq -r salmiak_editor.zip *
         working-directory: Salmiak_Editor
-
+          
       - name: Upload Editor
         uses: actions/upload-artifact@v4
         with:
@@ -68,14 +89,9 @@ jobs:
     runs-on: ubuntu-22.04
     permissions:
       contents: write
-    needs: build
+    needs: add_editor
 
     steps:
-      #- name: Download artifact snapshot-default
-      #  uses: actions/download-artifact@v1
-      #  with:
-      #    name: snapshot-default
-      #    path: all_snapshots
       - name: Download editor artifact
         uses: actions/download-artifact@v4
         with:
@@ -89,7 +105,7 @@ jobs:
       - name: Upload Editor
         uses: svenstaro/upload-release-action@v2
         with:
-          release_name: "v${{ inputs.tag }} Salmiak World Editor"
+          release_name: "v${{ inputs.tag }} Salmiak Editor"
           tag: ${{ inputs.tag }}
           repo_token: ${{ secrets.GITHUB_TOKEN }}
           file: releases/salmiak_editor.zip
