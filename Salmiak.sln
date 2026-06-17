@@ -9,10 +9,6 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Salmiak.Rendering", "Salmia
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Salmiak", "Salmiak\Salmiak.csproj", "{AF4B6719-B460-4D42-AE40-BEC385EB9A12}"
 EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Salmiak.Test", "Salmiak.Test\Salmiak.Test.csproj", "{4A80D140-1825-4907-A57D-C09C25F756A2}"
-EndProject
-Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "SpellEditor", "..\SpellEditor\SpellEditor.csproj", "{1A96FFED-65E0-41B1-A90D-71435B2B9089}"
-EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
