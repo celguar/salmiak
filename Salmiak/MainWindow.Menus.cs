@@ -182,7 +182,16 @@ public partial class MainWindow
         if (DoodadDrawer.Visibility == Visibility.Visible) _drawerRefresh?.Invoke();
 
         string? cur = (MapList.SelectedItem as MapEntry)?.Name;
-        var maps = _mpq.ListMaps();
+        List<string>? maps;
+        try
+        {
+            maps = _mpq.ListMaps();
+        }
+        catch (Exception ex)
+        {
+            StatusText.Text = $"Error: {ex.Message}"; return;
+        }
+
         MapList.Items.Clear();
         _mapIds = null;
         foreach (var m in maps) MapList.Items.Add(MakeMapEntry(m));
