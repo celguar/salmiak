@@ -1,0 +1,114 @@
+name: Windows Release
+
+# on: ['push']
+# use manual run
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Release Tag'
+        required: true
+        default: '0.1.1'
+        type: string
+      update_release:
+        description: 'Update Release'
+        required: true
+        default: true
+        type: boolean
+
+env:
+  DOTNET_VERSION: '9.0.x'
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repository content
+        uses: actions/checkout@v3
+        with:
+          fetch-depth: 0
+
+      - name: Setup .NET Core SDK
+        uses: actions/setup-dotnet@v2
+        with:
+          dotnet-version: ${{ env.DOTNET_VERSION }}
+
+      - name: Install dependencies
+        run: dotnet restore
+
+      - name: Publish
+        run: dotnet publish --configuration Release --use-current-runtime -p:UsePublishBuildSettings=true
+
+      - name: Copy files
+        run: cp -r ./Salmiak/bin/Release/*/win-x64/publish/ publish
+        
+      - name: Remove Symbols
+        run:  |
+          Remove-Item "publish\*.pdb"
+
+      - name: Upload Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: salmiak_${{ github.sha }}
+          path: publish/*
+          if-no-files-found: error
+          
+  add_editor:
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    needs: build
+    
+    steps:
+    
+      - name: Download Salmiak
+        uses: actions/download-artifact@v4
+        with:
+          name: salmiak_${{ github.sha }}
+          path: editor
+          
+      - name: Prepare Folder
+        run: |
+          mkdir -m777 -p upload/Salmiak_Editor
+          cp -r editor/* upload/Salmiak_Editor
+          
+      - name: Archive Editor
+        run: zip -qq -r salmiak_editor.zip *
+        working-directory: upload
+          
+      - name: Upload Editor
+        uses: actions/upload-artifact@v4
+        with:
+          name: salmiak_editor_${{ github.sha }}
+          path: upload/salmiak_editor.zip
+          if-no-files-found: error
+
+  upload:
+    if: ${{ inputs.update_release }} == true
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    needs: add_editor
+
+    steps:
+      - name: Download editor artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: salmiak_editor_${{ github.sha }}
+          path: releases
+
+      - name: Get current date
+        id: date
+        run: echo "::set-output name=date::$(date +'%d.%m.%y')"        
+        
+      - name: Upload Editor
+        uses: svenstaro/upload-release-action@v2
+        with:
+          release_name: "v${{ inputs.tag }} Salmiak Editor"
+          tag: ${{ inputs.tag }}
+          repo_token: ${{ secrets.GITHUB_TOKEN }}
+          file: releases/salmiak_editor.zip
+          asset_name: "salmiak_editor.zip"
+          overwrite: true
+          make_latest: false
