@@ -125,8 +125,9 @@ public sealed class WmoRenderer : IDisposable
             0, 0, -1, 0,
             0, 1,  0, 0,
             0, 0,  0, 1);
-        var rot = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(w.Rotation.Z))
-                * Matrix4.CreateRotationX(MathHelper.DegreesToRadians(w.Rotation.X))
+        
+        var rot = Matrix4.CreateRotationX(MathHelper.DegreesToRadians(w.Rotation.Z))
+                * Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(-w.Rotation.X))
                 * Matrix4.CreateRotationY(MathHelper.DegreesToRadians(w.Rotation.Y - 90f));
         var translate = Matrix4.CreateTranslation(w.Position.X - MapHalf, w.Position.Y, w.Position.Z - MapHalf);
         return axisFix * rot * translate;

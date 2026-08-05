@@ -181,8 +181,9 @@ public sealed partial class GlViewport
         float a = -MathHelper.DegreesToRadians(yawDeg - 90f);
         float ca = MathF.Cos(a), sa = MathF.Sin(a);
         var nl = new Vector3(n.X * ca + n.Z * sa, n.Y, -n.X * sa + n.Z * ca);
-        float pitch = MathF.Atan2(nl.Z, nl.Y);
-        float roll  = MathF.Atan2(-nl.X, MathF.Sqrt(nl.Y * nl.Y + nl.Z * nl.Z));
+        
+        float pitch = MathF.Atan2(nl.X, nl.Y);
+        float roll  = MathF.Asin(Math.Clamp(nl.Z, -1f, 1f));
         return (MathHelper.RadiansToDegrees(pitch), MathHelper.RadiansToDegrees(roll));
     }
 
@@ -392,9 +393,11 @@ public sealed partial class GlViewport
         {
             if (s.Index < 0 || s.Index >= s.Adt.Wmos.Count) return;
             var d = s.Adt.Wmos[s.Index];
-            if (_gizmoAxis == 0) d.Rotation.X += dxp * 0.5f;
+            // Ring 0 spins about world X, ring 2 about world Z; MODF stores those as
+            // rotation.Z and -rotation.X respectively.
+            if (_gizmoAxis == 0) d.Rotation.Z += dxp * 0.5f;
             else if (_gizmoAxis == 1) d.Rotation.Y += dxp * 0.5f;
-            else if (_gizmoAxis == 2) d.Rotation.Z += dxp * 0.5f;
+            else if (_gizmoAxis == 2) d.Rotation.X -= dxp * 0.5f;
             else if (_gizmoAxis == 4) d.Position.X += tmove;
             else if (_gizmoAxis == 5) d.Position.Y += tmove;
             else if (_gizmoAxis == 6) d.Position.Z += tmove;
@@ -407,9 +410,11 @@ public sealed partial class GlViewport
         {
             if (s.Index < 0 || s.Index >= s.Adt.Doodads.Count) return;
             var d = s.Adt.Doodads[s.Index];
-            if (_gizmoAxis == 0) d.Rotation.X += dxp * 0.5f;
+            // Ring 0 spins about world X, ring 2 about world Z; MDDF stores those as
+            // rotation.Z and -rotation.X respectively.
+            if (_gizmoAxis == 0) d.Rotation.Z += dxp * 0.5f;
             else if (_gizmoAxis == 1) d.Rotation.Y += dxp * 0.5f;
-            else if (_gizmoAxis == 2) d.Rotation.Z += dxp * 0.5f;
+            else if (_gizmoAxis == 2) d.Rotation.X -= dxp * 0.5f;
             else if (_gizmoAxis == 7 && freeMove) d.Position = moveTo;
             else if (_gizmoAxis == 3)
             {

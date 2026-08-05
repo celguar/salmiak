@@ -181,8 +181,9 @@ public sealed class DoodadRenderer : IDisposable
             0, 0,  0, 1);
 
         var scale = Matrix4.CreateScale(d.Scale);
-        var rot = Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(d.Rotation.Z))
-                * Matrix4.CreateRotationX(MathHelper.DegreesToRadians(d.Rotation.X))
+        
+        var rot = Matrix4.CreateRotationX(MathHelper.DegreesToRadians(d.Rotation.Z))
+                * Matrix4.CreateRotationZ(MathHelper.DegreesToRadians(-d.Rotation.X))
                 * Matrix4.CreateRotationY(MathHelper.DegreesToRadians(d.Rotation.Y - 90f));
         var translate = Matrix4.CreateTranslation(
             d.Position.X - MapHalf,
