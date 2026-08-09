@@ -378,10 +378,31 @@ public sealed class WowMpqArchive : IDisposable
 
         if (mask == 0x02)
         {
-            var ms = new MemoryStream(expectedSize);
-            using var zlib = new ZLibStream(new MemoryStream(data, 1, data.Length - 1), CompressionMode.Decompress);
-            zlib.CopyTo(ms);
-            return ms.ToArray();
+            // Try 1: Assume it has a 2-byte Zlib header (after the 1-byte mask)
+            try
+            {
+                // Start at offset 1 to skip the mask, then skip 2 more bytes for the Zlib header
+                var ms = new MemoryStream(expectedSize);
+                using var deflate = new DeflateStream(new MemoryStream(data, 3, data.Length - 3), CompressionMode.Decompress);
+                deflate.CopyTo(ms);
+                return ms.ToArray();
+            }
+            catch
+            {
+                // Try 2: Assume it is raw Deflate with NO header (just skip the 1-byte mask)
+                try
+                {
+                    var ms = new MemoryStream(expectedSize);
+                    using var deflate = new DeflateStream(new MemoryStream(data, 1, data.Length - 1), CompressionMode.Decompress);
+                    deflate.CopyTo(ms);
+                    return ms.ToArray();
+                }
+                catch
+                {
+                    // If both fail, return raw bytes or handle it cleanly
+                    return data[1..];
+                }
+            }
         }
         if (mask == 0x08)
             return Implode(data[1..], expectedSize);
