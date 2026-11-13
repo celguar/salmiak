@@ -28,27 +28,42 @@ public partial class MainWindow
             panel.Children.Add(header); panel.Children.Add(sl);
             return sl;
         }
-        var azimuth = MakeSlider("Sun azimuth", 0, 360, 0, "°");
-        var elevation = MakeSlider("Sun elevation", 10, 80, 30, "°");
-        var maxDist = MakeSlider("Max shadow length", 20, 200, 130, " yd");
+        System.Windows.Controls.CheckBox MakeCheck(string label, bool on)
+        {
+            var cb = new System.Windows.Controls.CheckBox { Content = label, Foreground = System.Windows.Media.Brushes.White, IsChecked = on, Margin = new Thickness(0, 6, 0, 0) };
+            panel.Children.Add(cb);
+            return cb;
+        }
 
-        var doodads = new System.Windows.Controls.CheckBox
-        { Content = "Doodad shadows (trees cast crown blobs)", Foreground = System.Windows.Media.Brushes.White, IsChecked = true, Margin = new Thickness(0, 10, 0, 0) };
-        panel.Children.Add(doodads);
-        var wmos = new System.Windows.Controls.CheckBox
-        { Content = "WMO shadows (buildings cast box shadows)", Foreground = System.Windows.Media.Brushes.White, IsChecked = true, Margin = new Thickness(0, 6, 0, 0) };
-        panel.Children.Add(wmos);
+        var rot = MakeSlider("Sun rotation", 0, 360, 34, "°");
+        var height = MakeSlider("Sun height", -80, 80, 30, "°");
+        var maxDist = MakeSlider("Max shadow length", 20, 400, 150, " yd");
+        var alphaThresh = MakeSlider("Alpha threshold", 0, 255, 200, "");
+        var samples = MakeSlider("Softness samples", 1, 8, 3, "x");
+        var hitThresh = MakeSlider("Hit threshold", 1, 48, 1, "");
+        var jitter = MakeSlider("Ray jitter", 0, 40, 1, " ‰");
+
+        var doodads = MakeCheck("Doodad shadows (M2 triangles)", true);
+        var wmos = MakeCheck("WMO shadows (building triangles)", true);
+        var alphaTest = MakeCheck("Alpha-test foliage (leaves let light through)", true);
+        var skipTransparent = MakeCheck("Skip mostly transparent texture layers", false);
+        var soft = MakeCheck("Soft shadows (sub-texel rays)", false);
+        var jitterOn = MakeCheck("Jitter rays from the occluder distance", false);
+        var keepOld = MakeCheck("Keep existing shadows (grow the ones already in the ADT)", false);
+        var terrainBlocks = MakeCheck("Terrain slopes block the sun", false);
 
         panel.Children.Add(new System.Windows.Controls.TextBlock { Text = "Scope", Foreground = System.Windows.Media.Brushes.White, Margin = new Thickness(0, 10, 0, 2) });
         var scope = new System.Windows.Controls.ComboBox();
-        scope.Items.Add("Edited chunks only (recommended)");
+        var selCount = _viewport.BakedChunkCount;
+        scope.Items.Add(selCount > 0 ? $"Selected chunks ({selCount} selected)" : "Selected chunks - none yet (enter Ctrl+I first)");
+        scope.Items.Add("Edited tiles only (recommended)");
         scope.Items.Add("All loaded tiles (overwrites Blizzard shadows!)");
-        scope.SelectedIndex = 0;
+        scope.SelectedIndex = selCount > 0 ? 0 : 1;
         panel.Children.Add(scope);
 
         panel.Children.Add(new System.Windows.Controls.TextBlock
         {
-            Text = "Replaces the baked shadow of every chunk in scope. One undo step - bake, judge, Ctrl+Z and retune freely. Touch up with the shadow brush (Ctrl+M) after.",
+            Text = "Rays are traced against real WMO and M2 triangles, so shadows match the models you see. Pick chunks with Ctrl+I to bake only part of a tile - the selection survives, so Ctrl+Z and retune the sun and bake again. Touch up with the shadow brush (Ctrl+M) after.",
             Foreground = System.Windows.Media.Brushes.LightGray, FontSize = 11, TextWrapping = TextWrapping.Wrap, Margin = new Thickness(0, 10, 0, 0),
         });
 
@@ -57,7 +72,7 @@ public partial class MainWindow
 
         var win = new Window
         {
-            Title = "Bake shadows", Width = 380, SizeToContent = SizeToContent.Height, Owner = this,
+            Title = "Bake shadows (all tiles)", Width = 420, SizeToContent = SizeToContent.Height, Owner = this,
             WindowStartupLocation = WindowStartupLocation.CenterOwner, ResizeMode = ResizeMode.NoResize,
             Background = System.Windows.Media.Brushes.DimGray,
             Content = panel,
@@ -66,10 +81,42 @@ public partial class MainWindow
         _viewport.ModalOpen = true;
         try { if (win.ShowDialog() != true) return; } finally { _viewport.ModalOpen = false; }
 
+        _viewport.ShadowSunRotation = (float)rot.Value;
+        _viewport.ShadowSunHeight = (float)height.Value;
+        _viewport.ShadowMaxDistance = (float)maxDist.Value;
+        _viewport.ShadowAlphaThreshold = (int)alphaThresh.Value;
+        _viewport.ShadowHighResSamples = (int)samples.Value;
+        _viewport.ShadowHighResThreshold = (int)hitThresh.Value;
+        _viewport.ShadowJitterValue = (float)jitter.Value / 100f;
+        _viewport.ShadowDoodads = doodads.IsChecked == true;
+        _viewport.ShadowWmos = wmos.IsChecked == true;
+        _viewport.ShadowAlphaTest = alphaTest.IsChecked == true;
+        _viewport.ShadowSkipTransparent = skipTransparent.IsChecked == true;
+        _viewport.ShadowHighRes = soft.IsChecked == true;
+        _viewport.ShadowJitter = jitterOn.IsChecked == true;
+        _viewport.ShadowKeepOld = keepOld.IsChecked == true;
+        _viewport.ShadowTerrainBlocks = terrainBlocks.IsChecked == true;
+
+        var chosen = scope.SelectedIndex switch
+        {
+            0 => GlViewport.BakeScope.SelectedChunks,
+            2 => GlViewport.BakeScope.AllTiles,
+            _ => GlViewport.BakeScope.EditedTiles,
+        };
+
         StatusText.Text = "Baking shadows...";
-        int n = _viewport.BakeShadows((float)azimuth.Value, (float)elevation.Value, (float)maxDist.Value,
-                                      doodads.IsChecked == true, wmos.IsChecked == true, scope.SelectedIndex == 0);
-        StatusText.Text = n > 0 ? $"Baked shadows for {n} chunk(s) - Ctrl+Z to undo and retune." : "Bake shadows: nothing in scope.";
+        int n = _viewport.BakeShadows(chosen);
+        //Keep the chunk selection when it was the scope so the sun can be retuned and the same
+        //chunks baked again; otherwise drop it so a stale selection cannot affect later bakes.
+        if (chosen != GlViewport.BakeScope.SelectedChunks)
+            _viewport.ClearBakeChunks();
+        StatusText.Text = n > 0 ? $"Ray-baked {n} chunk(s) - Ctrl+Z to undo and retune."
+            : chosen == GlViewport.BakeScope.SelectedChunks && selCount == 0
+            ? "No chunks selected: enter bake-chunk mode (Ctrl+I), click the chunks, then bake."
+            : "Bake shadows: nothing changed in scope.";
+        //If the Shadows sidebar is open, repaint it from the values this dialog just used so the
+        //two never disagree about what the next bake will do.
+        if (_viewport.CurrentTool == GlViewport.Tool.Shadow) RefreshShadowOptions();
     }
 
     private void SetWoWDirectory_Click(object sender, RoutedEventArgs e)

@@ -54,6 +54,9 @@ public sealed partial class GlViewport
         _dpiX = dpi.DpiScaleX; _dpiY = dpi.DpiScaleY;
         if (_pendingStream is { } ps) { _pendingStream = null; StreamMap(ps.Wdt, ps.Name); }
         PollMouse();
+        //Shadow bake: walk the pending ray job a slice per rendered frame, which keeps the window
+        //drawing (and the sidebar progress bar moving) while thousands of texels are being tested.
+        StepBakeFrame();
 
         _tickNo++;
         if (ModalOpen)
@@ -91,7 +94,8 @@ public sealed partial class GlViewport
 
         bool active = IsAppActive();
         if (active) ProcessKeyboardInput(dt);
-        if (active && (EditMode || TextureMode) && !DoodadMode && !WmoMode && !_blendMode && !GenerateMode && !_areaMode && !_hmPlacing && _lmb) EditStep(dt);
+        if (active && (EditMode || TextureMode) && !DoodadMode && !WmoMode && !_blendMode && !GenerateMode &&
+            !_areaMode && !_hmPlacing && !BakeChunksMode && _lmb) EditStep(dt);
         UpdateStreaming();
 
         if (_doodads != null && _doodads.DrainReady() > 0) RefreshPlacements();
@@ -191,6 +195,8 @@ public sealed partial class GlViewport
                 _brush.Render(_camera, aspect, _outline, BuildChunkOutline(areaHover));
             }
         }
+
+        if (BakeChunksMode && _brush != null) RenderBakeOverlay(aspect);
 
         if (_hmPlacing && _hmCornerA != null && _brush != null &&
             PickTerrain(_mouseX, _mouseY, out var hmCur))

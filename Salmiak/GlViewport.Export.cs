@@ -189,6 +189,7 @@ public sealed partial class GlViewport
 
         var files = new Dictionary<string, byte[]>(StringComparer.OrdinalIgnoreCase);
         bool anyNewTile = false;
+        int injected = 0, rebuilt = 0;
         foreach (var kv in _editedTiles)
         {
             var (tx, ty) = kv.Key;
@@ -207,8 +208,23 @@ public sealed partial class GlViewport
                 original = AdtWriter.BuildTemplate(kv.Value);
                 anyNewTile = true;
             }
-            files[adtPath] = AdtWriter.Build(original, kv.Value);
+            // Shadow-only patch first: it rewrites just the MCSH sub-chunk inside the pristine
+            // .adt and is only shipped when a re-parse proves the rest of the file still matches
+            // the edited tile, so M2/WMO data never passes through the writer.
+            var inj = AdtShadowInjector.BakeShadowsForAdt(original, kv.Value);
+            if (inj != null)
+            {
+                files[adtPath] = inj;
+                injected++;
+            } else {
+                files[adtPath] = AdtWriter.Build(original, kv.Value);
+                rebuilt++;
+            }
         }
+        if (injected > 0 && Notify != null)
+            Notify?.Invoke($"{injected} ADT(s) patched shadows-only ({rebuilt} rebuilt in full)");
+        else if (rebuilt > 0 && Notify != null)
+            Notify?.Invoke($"{rebuilt} ADT(s) rebuilt in full ({injected} patched shadows-only)");
 
         if (!_editedTiles.IsEmpty && files.Count == 0)
             throw new InvalidOperationException("Could not read any base ADTs to export.");

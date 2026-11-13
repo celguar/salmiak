@@ -246,6 +246,8 @@ public sealed partial class GlViewport
         }
         if (EditMode)
         {
+            if (BakeChunksMode)
+                return "Bake chunks (raycast)   click chunks to add   Shift+drag a block   Shift+C whole tile, C resets\nNothing sculpts while you pick   bake with the sidebar button, the bar counts chunks   Ctrl+Z undo / Ctrl+Y redo";
             if (DeleteMode)
                 return "Delete terrain / holes (Ctrl+H)\nLMB punch holes (caves)   Ctrl+LMB fill back   Ctrl+scroll brush size   Ctrl+H exit   Ctrl+Z undo / Ctrl+Y redo";
             if (FlattenMode)

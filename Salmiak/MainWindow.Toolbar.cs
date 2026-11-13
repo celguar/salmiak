@@ -30,7 +30,7 @@ public partial class MainWindow
             (GlViewport.Tool.Smooth,   "Smooth",  "Smooth / blur  (Ctrl+B)"),
             (GlViewport.Tool.Noise,    "Noise",   "Noise / roughen  (Ctrl+K)"),
             (GlViewport.Tool.Delete,   "Holes",   "Delete terrain / punch holes  (Ctrl+H)"),
-            (GlViewport.Tool.Shadow,   "Shadow",  "Baked-shadow brush - paint, Ctrl+LMB erase  (Ctrl+M)"),
+            (GlViewport.Tool.Shadow,   "Shadows", "Shadows - raycast bake chunks (Ctrl+I) or paint with the shadow brush (Ctrl+M)"),
             (GlViewport.Tool.Liquid,   "Liquids", "Liquids - select / place / re-level  (Ctrl+U)"),
             (GlViewport.Tool.Texture,  "Texture", "Texture paint  (Ctrl+T)"),
             (GlViewport.Tool.Doodad,   "Doodad",  "Place / edit doodads  (Ctrl+D)"),
@@ -63,6 +63,9 @@ public partial class MainWindow
     private void RefreshToolbar()
     {
         if (_viewport == null || _toolButtons.Count == 0) return;
+        //The shadow sidebar runs first: when it leaves, it hands the panel slot back to the map
+        //panel, and UpdateDoodadDrawer below then re-decides whether the drawer owns that slot.
+        UpdateShadowPanel();
         UpdateDoodadDrawer();
         var cur = _viewport.CurrentTool;
         foreach (var (tool, btn) in _toolButtons)
@@ -73,7 +76,8 @@ public partial class MainWindow
             GlViewport.Tool.Navigate => "Navigate",     GlViewport.Tool.Sculpt => "Sculpt (raise/lower)",
             GlViewport.Tool.Flatten => "Flatten",       GlViewport.Tool.Smooth => "Smooth",
             GlViewport.Tool.Noise => "Noise",           GlViewport.Tool.Delete => "Delete / holes",
-            GlViewport.Tool.Shadow => "Shadow brush",   GlViewport.Tool.Liquid => "Liquids",
+            GlViewport.Tool.Shadow => _viewport.BakeChunksMode ? "Shadows - raycast bake" : "Shadow brush",
+            GlViewport.Tool.Liquid => "Liquids",
             GlViewport.Tool.Texture => "Texture paint",
             GlViewport.Tool.Doodad => "Doodads",        GlViewport.Tool.Wmo => "WMOs",
             GlViewport.Tool.Flight => "Taxi mode",      GlViewport.Tool.Npc => "NPC view",
@@ -131,6 +135,18 @@ public partial class MainWindow
   Ctrl+D  Doodads                Ctrl+W  WMOs
   B       Taxi mode              Ctrl+A  Area-id paint
   Esc     Deselect / exit the current mode
+
+SHADOWS
+  Ctrl+I  enter/leave the Shadows tool (raycast: pick chunks to bake)
+  the left sidebar then holds the bake options and the Bake button
+   click a chunk = add it to the bake list   ·   Shift+drag = add a block of chunks
+   C resets the list   ·   Shift+C = every chunk of the tile under the cursor
+   Esc or Ctrl+I again leaves the tool   ·   the Bake button bakes what you picked
+   shadows are traced against real WMO + M2 triangles; Ctrl+Z undoes one bake
+   clicking chunks never sculpts: while the picker is open the brush stays off
+   sun height 30° / rotation 34° and alpha 200 match the shadows in the retail client
+   the bake runs chunk by chunk between frames, so the sidebar bar moves while it works
+   Ctrl+M switches the tool to the freehand shadow brush (same sidebar)
 
 SCULPT  (Ctrl+E)
   LMB raise   ·   Ctrl+LMB lower   ·   Ctrl+scroll  brush size

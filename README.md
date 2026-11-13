@@ -14,7 +14,10 @@
 * **Raise / lower:** `[LMB]` / `[Ctrl+LMB]`. Brush size `[Ctrl+scroll]`, strength and falloff `[middle-click]`.
 * **Flatten to clicked height** `[Ctrl+F]`, **smooth** `[Ctrl+B]`, **noise** `[Ctrl+K]`.
 * **Holes:** punch `[Ctrl+H]`, fill back `[Ctrl+LMB]`.
-* **Baked shadow brush** `[Ctrl+M]` (erase `[Ctrl+LMB]`); full-tile bake from the Map menu.
+* **Shadows** `[Ctrl+I]` / `[Ctrl+M]`: one toolbar button, two faces. The left sidebar then swaps in (like the Doodads/WMO drawers) and holds a **Brush / Raycast** radio, the bake options, a **Bake Shadows** button and a progress bar.
+  * **Raycast bake** `[Ctrl+I]`: click chunks to add them to the bake list, `[Shift+drag]` adds a block, `Shift+C` picks every chunk of the tile under the cursor, `C` resets the list. The sidebar button bakes exactly those chunks (with nothing picked it bakes the edited tiles), the bar counts chunks as they finish, and the selection survives so `[Ctrl+Z]` + retuning the sun bakes the same chunks again. While chunks are being picked nothing sculpts, so a selection click never lifts the terrain.
+  * **Shadow brush** `[Ctrl+M]` (erase `[Ctrl+LMB]`): paint baked shadow by hand, e.g. ghost a doorway or brighten a seam.
+  * Rays are traced against real WMO and M2 triangles, so shadows match what you see. The sidebar sets sun height/rotation, shadow length, the alpha cutoff (alpha ≥ threshold blocks), softness, hit limit and jitter; the defaults (`height 30°`, `rotation 34°`, `alpha 200`) are the ones that reproduce the shadows Blizzard baked in the 1.12 client. Baking walks the chunks a few at a time between frames, so the window keeps drawing and the bar keeps moving even on a whole map. The Map menu keeps the full bake dialog for whole-map bakes.
 * **River / valley carve** `[Ctrl+J]`: drop points, `[Enter]` cuts the bed plus optional water.
 * **Heightmap import** (Map menu): stretch a PNG over a marked rectangle.
 * **Objects follow the terrain** as you sculpt `[Ctrl+Q]`.
@@ -61,7 +64,7 @@
 
 ## Export and deploy (Project menu)
 
-* **Export to MPQ:** rebuilds the edited ADTs, patches the WDT, regenerates minimaps, bundles Map.dbc, AreaTable.dbc, and the taxi DBCs.
+* **Export to MPQ:** rebuilds the edited ADTs, patches the WDT, regenerates minimaps, bundles Map.dbc, AreaTable.dbc, and the taxi DBCs. If a tile's only change is its shadow map, the original `.adt` bytes are patched instead of rebuilt — MCSH payloads are rewritten in place, or an MCSH is inserted where a chunk had none — and the result is re-parsed and compared against the edited tile (shadow maps and a chunk's shadow flag aside) before shipping; a tile that fails that check falls back to the full rebuild.
 * **Writes** cmangos server .map grids and a placeholder mmap so new maps load. Merge MPQs.
 * **Deploy:** validate, merge into the client patch slot, copy DBCs and .map to the server, optional flightmaster SQL apply, optional mangosd restart (saved profiles).
 * **Project files (.wmproj)** carry tiles, zones, routes, WMO overrides, and camera. Save `[Ctrl+S]`, load `[Ctrl+O]`.

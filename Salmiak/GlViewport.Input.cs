@@ -231,6 +231,21 @@ public sealed partial class GlViewport
         }
         _prevI = iNow;
 
+        bool bakeNow = ctrl && IsKeyDown(Keys.I) && !ModalOpen;
+        if (bakeNow && !_prevBake) ToggleBakeChunks();
+        _prevBake = bakeNow;
+
+        //In the Shadows tool: C resets the chunk list, Shift+C picks every chunk of the tile under
+        //the cursor. (Ctrl+C is the terrain clipboard, so it stays untouched here.)
+        bool bakeClear = BakeChunksMode && IsKeyDown(Keys.C) && !ctrl;
+        if (bakeClear && !_prevBakeClear)
+        {
+            bool bakeShift = (GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
+            if (bakeShift) SelectAllBakeChunks(false);
+            else ClearBakeChunks();
+        }
+        _prevBakeClear = bakeClear;
+
         bool fNow = IsKeyDown(Keys.F) && !ctrl;
         if (fNow && !_prevF)
         {
@@ -326,6 +341,7 @@ public sealed partial class GlViewport
         if (escNow && !_prevEsc)
         {
             if (_hmPlacing) CancelHeightmapPlacement();
+            else if (BakeChunksMode) ExitBakeChunks();
             else if (_blendMode) { _blendMode = false; _blendSel.Clear(); _compatVerts = 0; Notify?.Invoke("Blend cancelled."); }
             else if (_areaMode) { _areaMode = false; Notify?.Invoke("Area-id paint off."); ModeChanged?.Invoke(ModeLabel()); }
             else if (GenerateMode) { GenerateMode = false; Notify?.Invoke("Ground generator off."); }
@@ -464,6 +480,13 @@ public sealed partial class GlViewport
             else if (NpcMode) NpcModeClick(e.X, e.Y);
             else if (HerbMode) HerbModeClick(e.X, e.Y);
             else if (_blendMode) BlendSelectAt(e.X, e.Y);
+            else if (BakeChunksMode)
+            {
+                bool bakeShift = (GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
+                if (bakeShift && TryGetChunkGridAt(e.X, e.Y, out var bakeStart))
+                { _bakeRectAnchor = bakeStart; _bakeRectCur = bakeStart; }
+                else AddBakeChunkAt(e.X, e.Y);
+            }
             else if (_areaMode)
             {
                 bool zShift = (GetAsyncKeyState((int)Keys.ShiftKey) & 0x8000) != 0;
@@ -608,6 +631,7 @@ public sealed partial class GlViewport
             _draggingNode = false;
             _liqGizmoDrag = false;
             if (_zoneRectAnchor is { } za) { ZoneRectPaint(za, _zoneRectCur); _zoneRectAnchor = null; }
+            if (_bakeRectAnchor != null) { CommitBakeRect(); _bakeRectAnchor = null; }
             if (_gizmoAxis >= 0) { CommitGizmo(); _gizmoAxis = -1; }
             else CommitStroke();
         }
@@ -626,6 +650,13 @@ public sealed partial class GlViewport
             if (TryGetChunkGridAt(e.X, e.Y, out var zc)) _zoneRectCur = zc;
             return;
         }
+        if (_lmb && _bakeRectAnchor != null)
+        {
+            if (TryGetChunkGridAt(e.X, e.Y, out var bc)) _bakeRectCur = bc;
+            UpdateBakeHover(e.X, e.Y);
+            return;
+        }
+        if (BakeChunksMode && !_lmb) UpdateBakeHover(e.X, e.Y);
         if (!_rmb) return;
         if (Math.Abs(e.X - _lastMx) + Math.Abs(e.Y - _lastMy) > 2) _rmbMoved = true;
         _camera.Rotate(e.X - _lastMx, e.Y - _lastMy);

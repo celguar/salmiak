@@ -190,6 +190,37 @@ public sealed class WmoRenderer : IDisposable
         return wmo;
     }
 
+    //CPU-side group triangles for the shadow baker (parsed without touching GL).
+    private readonly Dictionary<string, List<WmoFile.Group>> _cpuGroups = new(StringComparer.OrdinalIgnoreCase);
+
+    public List<WmoFile.Group> GetCpuGroups(string rootPath)
+    {
+        if (rootPath == null || rootPath.Length == 0) return [];
+        if (_cpuGroups.TryGetValue(rootPath, out var hit)) return hit;
+        var found = new List<WmoFile.Group>();
+        try
+        {
+            WmoFile.Root root;
+            using (var rs = _mpq.OpenFile(rootPath))
+                root = WmoFile.ParseRoot(rs);
+            string baseName = rootPath.Substring(0, rootPath.Length - 4);
+            for (int g = 0; g < root.GroupCount; g++)
+            {
+                string groupPath = $"{baseName}_{g:000}.wmo";
+                if (!_mpq.FileExists(groupPath)) continue;
+                using var gs = _mpq.OpenFile(groupPath);
+                var grp = WmoFile.ParseGroup(gs, root);
+                if (grp == null) continue;
+                found.Add(grp);
+            }
+        }
+        catch { found.Clear(); }
+        _cpuGroups[rootPath] = found;
+        return found;
+    }
+
+    public void ClearCpuGeometry() => _cpuGroups.Clear();
+
     private GpuGroup Upload(WmoFile.Group grp)
     {
         var g = new GpuGroup();

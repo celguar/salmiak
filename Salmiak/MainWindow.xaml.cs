@@ -68,8 +68,23 @@ public partial class MainWindow : Window
         _viewport.OpenTexturePicker += () => Dispatcher.BeginInvoke(FocusDoodadDrawer);
         _viewport.OpenBlendSettings += () => Dispatcher.BeginInvoke(ShowBlendSettings);
 
+        //Shadow sidebar progress: BeginInvoke, because a bake runs on the viewport thread and must
+        //not block on the window's dispatcher while it waits for its chunk workers.
+        _viewport.ShadowBakeProgressReset += () => Dispatcher.BeginInvoke(() =>
+        {
+            if (_shadowFill != null) _shadowFill.Width = 0;
+            if (_shadowProgressText != null) _shadowProgressText.Text = "Baking shadows...";
+        });
+        _viewport.ShadowBakeProgress += (done, total) => Dispatcher.BeginInvoke(() =>
+        {
+            if (total <= 0) return;
+            if (_shadowFill != null) _shadowFill.Width = Math.Clamp(done * ShadowBarWidth / total, 0d, ShadowBarWidth);
+            if (_shadowProgressText != null) _shadowProgressText.Text = $"{done}/{total} chunks";
+        });
+
         BuildToolbar();
         BuildDoodadDrawer();
+        BuildShadowPanel();
         SpeedText.Text = $"Speed: {_viewport.CameraSpeed:F0}";
 
         var saved = Properties.Settings.Default.WoWDataPath;

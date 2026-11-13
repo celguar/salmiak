@@ -33,6 +33,8 @@ public sealed partial class GlViewport : GLWpfControl, IDisposable
 
     private void ToggleSculptTool(SculptTool t)
     {
+        //Ctrl+M while chunks are picked switches the Shadows tool to its brush face, keeping the list.
+        if (BakeChunksMode && t == SculptTool.Shadow) { SelectShadowMode(true); return; }
         if (!EditMode) return;
         if (RiverMode) { RiverMode = false; _riverNodes.Clear(); _riverVertCount = 0; }
         var target = CurrentSculptTool == t ? SculptTool.Sculpt : t;
@@ -137,6 +139,15 @@ public sealed partial class GlViewport : GLWpfControl, IDisposable
         if (!LiquidMode) { _liqSel.Clear(); _liqArmed = 0; _liqScrollStroke = null; }
         if (!EditMode && !TextureMode) _blendMode = false;
         _areaMode = false;
+        //Leaving sculpt mode also drops the bake-chunk picker, so the Shadows tool unselects.
+        if (BakeChunksMode && m != EditorMode.Edit)
+        {
+            BakeChunksMode = false;
+            _bakeChunks.Clear();
+            _bakeRectAnchor = null;
+            _bakeHoverChunk = null;
+            ShadowMode = false;
+        }
         if (_hmPlacing) { _hmPlacing = false; _hmCornerA = null; _hmLum = null; }
 
         if (FlightMode) EnterFlightMode();
@@ -151,7 +162,9 @@ public sealed partial class GlViewport : GLWpfControl, IDisposable
 
     public enum Tool { Navigate, Sculpt, Flatten, Smooth, Noise, Delete, Shadow, Liquid, Texture, Doodad, Wmo, Flight, Npc, Zone, Herb }
 
+    //Shadow mode covers both the shadow brush and the bake-chunk picker: one nav-bar button.
     public Tool CurrentTool =>
+        BakeChunksMode || ShadowMode ? Tool.Shadow :
         _areaMode ? Tool.Zone :
         FlightMode ? Tool.Flight : DoodadMode ? Tool.Doodad : WmoMode ? Tool.Wmo :
         TextureMode ? Tool.Texture : LiquidMode ? Tool.Liquid : NpcMode ? Tool.Npc :
@@ -173,6 +186,7 @@ public sealed partial class GlViewport : GLWpfControl, IDisposable
             case Tool.Npc:      SetPrimaryMode(EditorMode.Npc); break;
             case Tool.Herb:     SetPrimaryMode(EditorMode.Herb); break;
             case Tool.Zone:     if (!_areaMode) ToggleAreaMode(); break;
+            case Tool.Shadow:   if (!BakeChunksMode) ToggleBakeChunks(); break;
             default:
                 if (!EditMode) SetPrimaryMode(EditorMode.Edit);
                 FlattenMode = t == Tool.Flatten;
@@ -185,7 +199,36 @@ public sealed partial class GlViewport : GLWpfControl, IDisposable
         }
     }
 
+    //The Shadows tool has two faces: the freehand brush and the raycast chunk picker. Switching
+    //between them keeps the chunk list, so the sun can be retuned and the same chunks baked again.
+    public void SelectShadowMode(bool brush)
+    {
+        if (brush)
+        {
+            if (ShadowMode && !BakeChunksMode) return;
+            BakeChunksMode = false;
+            _bakeRectAnchor = null;
+            _bakeHoverChunk = null;
+            if (!EditMode) SetPrimaryMode(EditorMode.Edit);
+            FlattenMode = DeleteMode = SmoothMode = NoiseMode = false;
+            ShadowMode = true;
+            Notify?.Invoke("Shadow brush ON - LMB paints baked shadow, Ctrl+LMB erases (ghost shadows / bright seams). Ctrl+M or the Raycast row switches to the chunk picker.");
+            ModeChanged?.Invoke(ModeLabel());
+        }
+        else
+        {
+            if (BakeChunksMode) return;
+            if (!EditMode) SetPrimaryMode(EditorMode.Edit);
+            ShadowMode = false;
+            BakeChunksMode = true;
+            UpdateBakeHover(_mouseX, _mouseY);
+            Notify?.Invoke("Bake chunks mode - click chunks to add, Shift+drag a block, Shift+C every chunk of this tile, C to reset, Esc, Ctrl+I or the Brush row leaves the Shadows tool.");
+            ModeChanged?.Invoke(ModeLabel());
+        }
+    }
+
     private string ModeLabel() => _hmPlacing ? "Mode: Place heightmap"
+        : BakeChunksMode ? "Mode: Shadows - raycast bake"
         : _areaMode ? (_targetAreaId > 0
             ? $"Mode: Zones - painting {_targetAreaId}{(AreaName(_targetAreaId) is string an ? $" ({an})" : "")}"
             : "Mode: Zones - inspect")

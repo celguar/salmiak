@@ -27,7 +27,7 @@ public sealed class DoodadRenderer : IDisposable
 
     private readonly Dictionary<string, GpuModel?> _models = new(StringComparer.OrdinalIgnoreCase);
 
-    private sealed class CpuModel
+    public sealed class CpuModel
     {
         public string Path = "";
         public NpcLook? Look;
@@ -40,6 +40,24 @@ public sealed class DoodadRenderer : IDisposable
         public float Radius;
         public bool Failed;
     }
+
+    //CPU-side geometry for the shadow baker (kept separate from the render cache so BLPs can be freed).
+    private readonly Dictionary<string, CpuModel?> _cpuModels = new(StringComparer.OrdinalIgnoreCase);
+
+    public CpuModel? GetCpuGeometry(string m2Path)
+    {
+        if (m2Path == null || m2Path.Length == 0) return null;
+        var key = Path.ChangeExtension(m2Path, ".m2");
+        if (_cpuModels.TryGetValue(key, out var cached)) return cached;
+        CpuModel? built = null;
+        try { built = BuildCpuModel(key, null); }
+        catch (Exception) { built = null; }
+        _cpuModels[key] = built;
+        return built;
+    }
+
+    public void ClearCpuGeometry() => _cpuModels.Clear();
+
     public sealed class NpcLook
     {
         public string? Skin;

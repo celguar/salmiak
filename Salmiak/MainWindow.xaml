@@ -29,7 +29,8 @@
                 <Separator />
                 <MenuItem Header="Zone _Lighting (Night)..." Click="ZoneLighting_Click" Foreground="Black" />
                 <Separator />
-                <MenuItem Header="Bake _Shadows..." Click="BakeShadows_Click" Foreground="Black" />
+                <MenuItem Header="Bake _Shadows (full options)..." Click="BakeShadows_Click" Foreground="Black"
+                          ToolTip="Full bake dialog: any scope, including every loaded tile. For normal baking use the Shadows sidebar." />
                 <Separator />
                 <MenuItem Header="Import _Heightmap..." Click="ImportHeightmap_Click" Foreground="Black" />
                 <Separator />
@@ -124,6 +125,9 @@
             <GridSplitter Grid.Column="1" Width="4" Background="#555" HorizontalAlignment="Stretch" />
 
             <Border Grid.Column="0" x:Name="DoodadDrawer" Background="#252526"
+                    Visibility="Collapsed" />
+
+            <Border Grid.Column="0" x:Name="ShadowSide" Background="#252526" Padding="6"
                     Visibility="Collapsed" />
 
             <Grid Grid.Column="2">

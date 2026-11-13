@@ -384,6 +384,127 @@ public sealed class AdtFile
         if ((flags & 0x20) != 0) return 4;
         return 0;
     }
+
+    // Everything that shadow baking must NOT have touched. Used to prove that an
+    // injected .adt (original bytes + patched shadow maps) still matches the tile as
+    // it was edited in the viewport; if anything else differs the injector is not
+    // usable and the tile has to go through the full writer instead. The one tolerated
+    // exception is the chunk shadow flag, which a chunk needs when it gains its first
+    // MCSH (see SameChunk).
+    public bool SameExceptShadows(AdtFile other)
+    {
+        if (!SameStrings(Textures, other.Textures)) return false;
+        if (!SameStrings(DoodadModels, other.DoodadModels)) return false;
+        if (!SameStrings(WmoModels, other.WmoModels)) return false;
+        if (!SameUInts(DoodadModelOffsets, other.DoodadModelOffsets)) return false;
+        if (!SameUInts(WmoModelOffsets, other.WmoModelOffsets)) return false;
+        if (!SameDoodads(Doodads, other.Doodads)) return false;
+        if (!SameWmos(Wmos, other.Wmos)) return false;
+
+        for (int y = 0; y < ChunksPerSide; y++)
+            for (int x = 0; x < ChunksPerSide; x++)
+                if (!SameChunk(Chunks[y, x], other.Chunks[y, x]))
+                    return false;
+        return true;
+    }
+
+    private static bool SameChunk(MapChunk? a, MapChunk? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        if (a.IndexX != b.IndexX || a.IndexY != b.IndexY || a.AreaId != b.AreaId) return false;
+        if (a.NLayers != b.NLayers) return false;
+        // The shadow flag (bit 0) may differ: injecting an MCSH into a chunk that had none
+        // sets it. Every other flag must match, or the patch touched something else.
+        if ((a.Flags | 1u) != (b.Flags | 1u)) return false;
+        if (a.Holes != b.Holes) return false;
+        if (a.Position != b.Position) return false;
+        for (int i = 0; i < MapChunk.HeightCount; i++)
+            if (a.Heights[i] != b.Heights[i])
+                return false;
+        if (a.McalSize != b.McalSize || a.McalIs4Bit != b.McalIs4Bit) return false;
+        for (int i = 0; i < MapChunk.MaxLayers; i++)
+        {
+            var la = a.Layers[i];
+            var lb = b.Layers[i];
+            if (la.TextureIndex != lb.TextureIndex || la.Flags != lb.Flags
+                || la.OffsetInMCAL != lb.OffsetInMCAL || la.EffectId != lb.EffectId)
+                return false;
+        }
+        for (int i = 0; i < 3; i++)
+            if (!SameBytes(a.AlphaMaps[i], b.AlphaMaps[i]))
+                return false;
+        if (!SameLiquid(a.Liquid, b.Liquid)) return false;
+        if (a.Normals is not null && b.Normals is not null && a.Normals.Length == b.Normals.Length)
+        {
+            for (int i = 0; i < a.Normals.Length; i++)
+                if (a.Normals[i] != b.Normals[i]) return false;
+        }
+        return true;   // shadow maps deliberately excluded
+    }
+
+    private static bool SameLiquid(LiquidLayer? a, LiquidLayer? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        if (a.Type != b.Type || a.MinHeight != b.MinHeight || a.MaxHeight != b.MaxHeight) return false;
+        for (int i = 0; i < a.Heights.Length; i++)
+            if (a.Heights[i] != b.Heights[i]) return false;
+        for (int i = 0; i < a.Render.Length; i++)
+            if (a.Render[i] != b.Render[i]) return false;
+        return true;
+    }
+
+    private static bool SameBytes(byte[]? a, byte[]? b)
+    {
+        if (a is null || b is null) return a is null && b is null;
+        if (a.Length != b.Length) return false;
+        for (int i = 0; i < a.Length; i++)
+            if (a[i] != b[i]) return false;
+        return true;
+    }
+
+    private static bool SameStrings(List<string> a, List<string> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (a[i] != b[i])
+                return false;
+        return true;
+    }
+
+    private static bool SameUInts(List<uint> a, List<uint> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+            if (a[i] != b[i])
+                return false;
+        return true;
+    }
+
+    private static bool SameDoodads(List<DoodadDef> a, List<DoodadDef> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            var x = a[i]; var y = b[i];
+            if (x.ModelPath != y.ModelPath || x.Position != y.Position || x.Rotation != y.Rotation
+                || x.Scale != y.Scale || x.UniqueId != y.UniqueId || x.Flags != y.Flags)
+                return false;
+        }
+        return true;
+    }
+
+    private static bool SameWmos(List<WmoDef> a, List<WmoDef> b)
+    {
+        if (a.Count != b.Count) return false;
+        for (int i = 0; i < a.Count; i++)
+        {
+            var x = a[i]; var y = b[i];
+            if (x.ModelPath != y.ModelPath || x.Position != y.Position || x.Rotation != y.Rotation
+                || x.UniqueId != y.UniqueId || x.Flags != y.Flags || x.DoodadSet != y.DoodadSet)
+                return false;
+        }
+        return true;
+    }
 }
 
 public sealed class MapChunk
@@ -413,6 +534,43 @@ public sealed class MapChunk
     public byte[]? ShadowMap { get; set; }
 
     public LiquidLayer? Liquid { get; set; }
+
+    // Shadow maps are 64x64 samples, one byte per texel (0 or 255). Texel (row, col)
+    // covers world position x = -Position.X + row * ChunkSize/63, z = -Position.Y + col * ChunkSize/63.
+    public const int TexelsPerSide = 64;
+    public const int ShadowTexels  = TexelsPerSide * TexelsPerSide;
+
+    public bool ShadowIsCleared()
+    {
+        if (ShadowMap is not byte[] m) return true;
+        for (int i = 0; i < m.Length; i++)
+            if (m[i] != 0)
+                return false;
+        return true;
+    }
+
+    public int ShadowTexelsSet()
+    {
+        if (ShadowMap is not byte[] m) return 0;
+        var n = 0;
+        for (int i = 0; i < m.Length; i++)
+            if (m[i] != 0)
+                n++;
+        return n;
+    }
+
+    public byte[]? ShadowSnapshot()
+    {
+        if (ShadowMap is not byte[] m) return null;
+        var c = new byte[m.Length];
+        Array.Copy(m, 0, c, 0, m.Length);
+        return c;
+    }
+
+    public void RestoreShadowMap(byte[]? snap)
+    {
+        ShadowMap = snap is byte[] s ? s : null;
+    }
 }
 
 public sealed class LiquidLayer

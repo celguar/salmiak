@@ -64,6 +64,58 @@ public sealed partial class GlViewport
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public bool ShadowMode { get; set; }
 
+    //Shadow bake settings: ray-traced shadows from WMO/M2 triangles (ported from WoWViewer's baker).
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    //Defaults match WoW Viewer's (30° height, 34° rotation), which is what reproduces Blizzard's
+    //own baked shadows; see the sun vector build in BakeShadows for the axis mapping.
+    public float ShadowSunHeight { get; set; } = 30f;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public float ShadowSunRotation { get; set; } = 34f;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public float ShadowMaxDistance { get; set; } = 150f;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowDoodads { get; set; } = true;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowWmos { get; set; } = true;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowKeepOld { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowTerrainBlocks { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowAlphaTest { get; set; } = true;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    //Alpha ≥ this blocks light. 200 is where the ray-traced trees stop eating the leaves of
+    //Blizzard's own shadows; 128 lets too much foliage cast.
+    public int ShadowAlphaThreshold { get; set; } = 200;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowSkipTransparent { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowHighRes { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public int ShadowHighResSamples { get; set; } = 3;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public int ShadowHighResThreshold { get; set; } = 1;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool ShadowJitter { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public float ShadowJitterValue { get; set; } = 0.005f;
+
+    public enum BakeScope { SelectedChunks, EditedTiles, AllTiles }
+
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public bool DoodadFollow { get; set; }
 
@@ -134,6 +186,9 @@ public sealed partial class GlViewport
     {
         if (_terrain == null || _wdt == null) return;
         if (!string.IsNullOrEmpty(PlaceDoodad)) return;
+        //The chunk picker of the Shadows tool is a click target, not a brush: while chunks are
+        //being picked nothing may sculpt, otherwise a selection click also lifts the terrain.
+        if (BakeChunksMode) return;
         if (!PickTerrain(_mouseX, _mouseY, out var hit)) return;
 
         if (TextureMode)
@@ -147,7 +202,7 @@ public sealed partial class GlViewport
         }
 
         if (RiverMode) return;
-        if (ShadowMode) { ApplyShadowBrush(hit, (GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0); return; }
+        if (ShadowMode && !BakeChunksMode) { ApplyShadowBrush(hit, (GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0); return; }
         if (DeleteMode) { DeleteTerrainAt(hit, (GetAsyncKeyState((int)Keys.ControlKey) & 0x8000) != 0); return; }
         if (SmoothMode) { ApplySmooth(hit, dt); return; }
         if (NoiseMode) { ApplyNoise(hit, dt); return; }
@@ -240,176 +295,624 @@ public sealed partial class GlViewport
         foreach (var adt in edited) MarkEdited(adt);
     }
 
-    public int BakeShadows(float azimuthDeg, float elevationDeg, float maxDist, bool doodadShadows, bool wmoShadows, bool editedOnly)
+    //A ray bake is a job, not a call: the viewport render loop resumes it frame by frame so the
+    //window keeps drawing (and the sidebar bar keeps moving) while thousands of texels are tested.
+    private sealed class BakeJob
     {
-        if (_terrain == null) return 0;
+        public List<(AdtFile Adt, MapChunk Ch)> Targets = new();
+        public List<ShadowOcc> Wmos = new();
+        public List<ShadowOcc> M2s = new();
+        public ShadowOpt Opt = null!;
+        public Stroke Rec = null!;
+        public bool[] Touched = [];
+        public Vector3 Sun;
+        public float MaxDist, Cs, TexStep, BaseJitter;
+        public int SubSamples, SubThreshold;
+        public int Index;
+        public string Map = "";
+    };
+
+    private BakeJob? _job;
+
+    //Blocking bake for the map menu, which has no viewport frames to drive the incremental one.
+    public int BakeShadows(BakeScope scope)
+    {
+        if (_job != null) { Notify?.Invoke("Bake shadows: a bake is already running in the viewport, wait for its bar."); return 0; }
+        if (!PrepareShadowBake(scope)) return 0;
+        BakeChunks(-1);
+        return FinishShadowBake();
+    }
+
+    //Starts a bake that the viewport render loop walks slice by slice, so the window keeps drawing
+    //and the shadow sidebar's progress bar moves while the rays run.
+    public bool StartShadowBake(BakeScope scope)
+    {
+        if (_job != null) { Notify?.Invoke("Bake shadows: a bake is already running - wait until its bar is full."); return false; }
+        if (!PrepareShadowBake(scope)) return false;
+        if (_job is not { } j) return false;
+        Notify?.Invoke($"Ray-baking shadows over {j.Targets.Count} chunk(s) frame by frame - watch the bar, Ctrl+Z undoes when the bar is full.");
+        return true;
+    }
+
+    //Gathers the chunks to bake and the real triangles that can cast on them, then leaves the work
+    //on _job. Everything expensive but chunk independent happens here so the rays can be sliced.
+    private bool PrepareShadowBake(BakeScope scope)
+    {
+        if (_terrain == null) return false;
         MakeCurrent();
 
-        float az = MathHelper.DegreesToRadians(azimuthDeg);
-        float el = MathHelper.DegreesToRadians(Math.Clamp(elevationDeg, 5f, 85f));
-        var sun = new Vector3(MathF.Cos(el) * MathF.Sin(az), MathF.Sin(el), MathF.Cos(el) * MathF.Cos(az));
-        var perpA = Vector3.Normalize(Vector3.Cross(sun, Vector3.UnitY));
-        var perpB = Vector3.Normalize(Vector3.Cross(sun, perpA));
-        var rays = new[]
-        {
-            sun,
-            Vector3.Normalize(sun + perpA * 0.05f + perpB * 0.025f),
-            Vector3.Normalize(sun - perpA * 0.045f - perpB * 0.03f),
-        };
+        float pitch = MathHelper.DegreesToRadians(Math.Clamp(ShadowSunHeight, -80f, 80f));
+        float yaw = MathHelper.DegreesToRadians(ShadowSunRotation);
+        //WoW Viewer builds (cos(H)·sin(R), sin(H), cos(H)·cos(R)) in WoW's own (X, Y, height) space,
+        //so its elevation sine lands on a horizontal axis and "Sun Height 30°" is really a sun about
+        //46° above the horizon. Salmiak rays run in GL space, where x = -adtY, z = -adtX and y is the
+        //height, which turns the very same pair of angles into the vector below: 30 / 34 reproduces
+        //the shadows the 1.12 client has, the way WoW Viewer's own defaults do.
+        var sun = new Vector3(-MathF.Sin(pitch), MathF.Cos(pitch) * MathF.Cos(yaw), -MathF.Cos(pitch) * MathF.Sin(yaw));
+        float maxDist = Math.Max(10f, ShadowMaxDistance);
+        int subSamples = ShadowHighRes ? Math.Clamp(ShadowHighResSamples, 2, 8) : 1;
+        int subThreshold = Math.Clamp(ShadowHighResThreshold, 1, 16);
+        float baseJitter = ShadowJitter ? Math.Clamp(ShadowJitterValue, 0f, 0.1f) : 0f;
+        int alphaThreshold = Math.Clamp(ShadowAlphaThreshold, 0, 255);
 
-        var spheres = new List<(Vector3 C, float R)>();
-        if (doodadShadows && _doodads != null)
+        //Chunks first: the occluder gather below only parses tiles that can reach these chunks.
+        var targets = CollectBakeTargets(scope);
+        if (targets.Count == 0)
         {
-            foreach (var kv in _tileCache)
-            {
-                var a = kv.Value; if (a == null) continue;
-                foreach (var d in a.Doodads)
-                {
-                    if (string.IsNullOrEmpty(d.ModelPath)) continue;
-                    if (!_doodads.TryGetModelBounds(d.ModelPath, out var mc, out var mr)) continue;
-                    float r = mr * d.Scale * 0.55f;
-                    if (r < 2f) continue;
-                    spheres.Add((Vector3.TransformPosition(mc, Salmiak.Rendering.DoodadRenderer.BuildTransform(d)), r));
-                }
-            }
+            Notify?.Invoke(scope == BakeScope.SelectedChunks
+                ? "Bake shadows: no chunks selected - click chunks, press Shift+C for the whole tile, or pick the Edited tiles scope."
+                : "Bake shadows: nothing in scope.");
+            return false;
         }
+        var wantTiles = BakeTilesInReach(targets, maxDist);
 
-        var boxes = new List<(Matrix4 Inv, Vector3 Min, Vector3 Max, Vector3 WC, float WR)>();
-        if (wmoShadows && _wmos != null)
-        {
+        //Real triangle occluders: WMO group geometry (local space + world inverse transform).
+        var wmoOcc = new List<ShadowOcc>();
+        var m2Occ = new List<ShadowOcc>();
+        var wmoTex = new Dictionary<string, (byte[] Rgba, int W, int H)>(StringComparer.OrdinalIgnoreCase);
+
+        if (ShadowWmos && _wmos != null && _mpq != null)
             foreach (var kv in _tileCache)
             {
-                var a = kv.Value; if (a == null) continue;
+                var a = kv.Value;
+                if (a == null || !wantTiles.Contains(kv.Key)) continue;
                 foreach (var w in a.Wmos)
                 {
                     if (string.IsNullOrEmpty(w.ModelPath)) continue;
-                    if (!_wmos.TryGetModelAabb(w.ModelPath, out var mn, out var mx)) continue;
-                    float wr = (mx - mn).Length * 0.5f;
-                    if (wr < 8f) continue;
-                    var xf = Salmiak.Rendering.WmoRenderer.BuildTransform(w);
-                    boxes.Add((xf.Inverted(), mn, mx, Vector3.TransformPosition((mn + mx) * 0.5f, xf), wr));
+                    var groups = _wmos.GetCpuGroups(w.ModelPath);
+                    if (groups.Count == 0) continue;
+                    if (!_wmos.TryGetModelAabb(w.ModelPath, out var wmn, out var wmx)) continue;
+                    var wxf = Salmiak.Rendering.WmoRenderer.BuildTransform(w);
+                    var winv = wxf.Inverted();
+                    var wcr = Vector3.TransformPosition((wmn + wmx) * 0.5f, wxf);
+                    float wr = Math.Max(2f, (wmx - wmn).Length * 0.5f);
+                    foreach (var grp in groups)
+                    {
+                        if (grp.Vertices.Length < WmoFile.GroupVertexStride || grp.Indices.Length < 3) continue;
+                        var ranges = new List<TriRange>(grp.Batches.Count);
+                        foreach (var bt in grp.Batches)
+                        {
+                            if (bt.IndexCount < 3) continue;
+                            var tr = new TriRange { Start = bt.IndexStart, Count = bt.IndexCount, Alpha = bt.AlphaTest, Tex = bt.TexturePath ?? "" };
+                            if (tr.Alpha && tr.Tex.Length > 0)
+                            {
+                                if (!wmoTex.TryGetValue(tr.Tex, out var dec))
+                                {
+                                    dec = (new byte[0], 0, 0);
+                                    try { using var ts = _mpq!.OpenFile(tr.Tex.Replace('/', '\\')); dec = BlpReader.Decode(ts); }
+                                    catch { }
+                                    wmoTex[tr.Tex] = dec;
+                                }
+                                var (decRgba, decW, decH) = dec;
+                                tr.Rgba = decRgba; tr.TW = decW; tr.TH = decH;
+                            }
+                            ranges.Add(tr);
+                        }
+                        var occ = new ShadowOcc { W = true, WC = wcr, WR = wr, Scale = 1f, Inv = winv, V = grp.Vertices,
+                                                   Idx = grp.Indices, Stride = WmoFile.GroupVertexStride, Ranges = ranges.ToArray() };
+                        occ.BBox = BuildTriBoxes(occ.V, occ.Idx, occ.Stride);
+                        wmoOcc.Add(occ);
+                    }
                 }
             }
-        }
 
-        var seen = new HashSet<Salmiak.Core.Formats.MapChunk>();
-        var targets = new List<(AdtFile Adt, Salmiak.Core.Formats.MapChunk Ch)>();
-        void AddTile(AdtFile a)
-        {
-            foreach (var ch in a.Chunks)
-                if (ch != null && seen.Add(ch)) targets.Add((a, ch));
-        }
-        if (editedOnly) foreach (var a in _editedTiles.Values) AddTile(a);
-        else foreach (var kv in _tileCache) if (kv.Value != null) AddTile(kv.Value);
-        if (targets.Count == 0) { Notify?.Invoke("Bake shadows: nothing in scope (no edited tiles?)."); return 0; }
+        if (ShadowDoodads && _doodads != null)
+            foreach (var kv in _tileCache)
+            {
+                var a = kv.Value;
+                if (a == null || !wantTiles.Contains(kv.Key)) continue;
+                foreach (var d in a.Doodads)
+                {
+                    if (string.IsNullOrEmpty(d.ModelPath)) continue;
+                    var cm = _doodads.GetCpuGeometry(d.ModelPath);
+                    if (cm == null || cm.Indices.Length < 3 || cm.Submeshes.Length == 0) continue;
+                    if (!_doodads.TryGetModelBounds(d.ModelPath, out var mcen, out var mrad)) continue;
+                    var dxf = Salmiak.Rendering.DoodadRenderer.BuildTransform(d);
+                    var dcen = Vector3.TransformPosition(mcen, dxf);
+                    float dr = Math.Max(0.5f, mrad * Math.Abs(d.Scale));
+                    var ranges = new List<TriRange>(cm.Submeshes.Length);
+                    foreach (var sm in cm.Submeshes)
+                    {
+                        if (sm.Count < 3) continue;
+                        var tex = sm.Tex ?? "";
+                        var tr = new TriRange { Start = sm.Start, Count = sm.Count, Alpha = true, Tex = tex };
+                        if (tex.Length > 0 && cm.Textures.TryGetValue(tex, out var ct))
+                        {
+                            var (ctRgba, ctW, ctH) = ct;
+                            tr.Rgba = ctRgba; tr.TW = ctW; tr.TH = ctH;
+                        }
+                        ranges.Add(tr);
+                    }
+                    if (ranges.Count == 0) continue;
+                    var occ = new ShadowOcc { W = false, WC = dcen, WR = dr, Scale = Math.Abs(d.Scale) < 1e-4f ? 1f : d.Scale,
+                                              Inv = dxf.Inverted(), V = cm.Vertices, Idx = cm.Indices, Stride = 8,
+                                              Ranges = ranges.ToArray() };
+                    occ.BBox = BuildTriBoxes(occ.V, occ.Idx, occ.Stride);
+                    m2Occ.Add(occ);
+                }
+            }
+
+        //Textures that block light: alpha coverage on a coarse grid (skip-transparent heuristic).
+        var texBlocks = new Dictionary<string, bool>(StringComparer.OrdinalIgnoreCase);
+        foreach (var lst in new[] { wmoOcc, m2Occ })
+            foreach (var m in lst)
+                foreach (var r in m.Ranges)
+                {
+                    r.Blocks = true;
+                    if (!r.Alpha || r.TW <= 0) continue;
+                    if (!texBlocks.TryGetValue(r.Tex, out var ok))
+                        texBlocks[r.Tex] = ok = AlphaCoverage(r.Rgba, r.TW, r.TH, alphaThreshold);
+                    r.Blocks = ok;
+                }
 
         var rec = new Stroke();
-        var adts = new HashSet<AdtFile>();
-        const float cs = AdtFile.ChunkSize;
+        float cs = AdtFile.ChunkSize;
         float texStep = cs / 63f;
+        var opt = new ShadowOpt { AlphaTest = ShadowAlphaTest, AlphaThreshold = alphaThreshold,
+                                   SkipTransparent = ShadowSkipTransparent, Terrain = ShadowTerrainBlocks,
+                                   Jitter = baseJitter, SubSamples = subSamples, SubThreshold = subThreshold,
+                                   Blocks = texBlocks };
 
         foreach (var (adt, ch) in targets)
         {
             rec.Shadows[ch] = ch.ShadowMap != null ? (byte[])ch.ShadowMap.Clone() : null;
             rec.Tiles.Add(adt);
-            adts.Add(adt);
         }
 
-        var results = new byte[]?[targets.Count];
-        System.Threading.Tasks.Parallel.For(0, targets.Count, i =>
+        var touched = new bool[targets.Count];
+        _job = new BakeJob { Targets = targets, Wmos = wmoOcc, M2s = m2Occ, Opt = opt, Rec = rec,
+                             Touched = touched, Sun = sun, MaxDist = maxDist, Cs = cs, TexStep = texStep,
+                             SubSamples = subSamples, SubThreshold = subThreshold, BaseJitter = baseJitter,
+                             Map = _mapName ?? "" };
+        ShadowBakeProgressReset?.Invoke();
+        return true;
+    }
+
+    //Chunks the bake scope covers; an empty selection never widens to the whole map.
+    private List<(AdtFile Adt, MapChunk Ch)> CollectBakeTargets(BakeScope scope)
+    {
+        var seen = new HashSet<MapChunk>();
+        var targets = new List<(AdtFile Adt, MapChunk Ch)>();
+        void AddTile(AdtFile a)
+        {
+            if (a == null) return;
+            for (int cy = 0; cy < AdtFile.ChunksPerSide; cy++)
+                for (int cx = 0; cx < AdtFile.ChunksPerSide; cx++)
+                {
+                    var ch = a.Chunks[cy, cx];
+                    if (ch != null && seen.Add(ch)) targets.Add((a, ch));
+                }
+        }
+        if (scope == BakeScope.SelectedChunks)
+        {
+            foreach (var k in _bakeChunks)
+            {
+                int tileX = BakeChunkTile(k.Col), tileY = BakeChunkTile(k.Row);
+                if (!_tileCache.TryGetValue((tileX, tileY), out var a) || a == null) continue;
+                var ch = a.Chunks[BakeChunkLocal(k.Row), BakeChunkLocal(k.Col)];
+                if (ch != null && seen.Add(ch)) targets.Add((a, ch));
+            }
+            //An empty selection stays empty: the caller refuses such a bake instead of widening it
+            //to the whole map, because these users asked for chunks they picked.
+        }
+        else if (scope == BakeScope.EditedTiles) foreach (var a in _editedTiles.Values) if (a != null) AddTile(a);
+        else foreach (var kv in _tileCache) if (kv.Value != null) AddTile(kv.Value);
+        return targets;
+    }
+
+    //Tiles whose geometry can reach those chunks: the tiles the chunks live in, padded by the ray
+    //length because a shadow crosses a tile border. Only these get their WMO/M2 geometry parsed,
+    //which is what keeps baking a handful of chunks snappy in a streamed map.
+    private HashSet<(int X, int Y)> BakeTilesInReach(List<(AdtFile Adt, MapChunk Ch)> targets, float maxDist)
+    {
+        const float tileSize = AdtFile.TileSize;
+        int pad = (int)Math.Ceiling(Math.Max(1f, maxDist) / tileSize) + 1;
+        var want = new HashSet<(int X, int Y)>();
+        foreach (var t in targets)
+            foreach (var kv in _tileCache)
+            {
+                if (kv.Value != t.Adt) continue;
+                var (tx, ty) = kv.Key;
+                for (int dy = -pad; dy <= pad; dy++)
+                    for (int dx = -pad; dx <= pad; dx++)
+                        want.Add((tx + dx, ty + dy));
+            }
+        return want;
+    }
+
+    //Runs one slice of the pending job: slice chunks worth of rays (-1 = every remaining chunk),
+    //in parallel. The viewport render loop calls it a few chunks per frame, so the window keeps
+    //drawing between slices and only the chunk work below has to stay untouched.
+    private void BakeChunks(int slice)
+    {
+        if (_job is not { } j) return;
+        var targets = j.Targets;
+        var touched = j.Touched;
+        var wmoOcc = j.Wmos;
+        var m2Occ = j.M2s;
+        var opt = j.Opt;
+        var sun = j.Sun;
+        var cs = j.Cs;
+        var texStep = j.TexStep;
+        var maxDist = j.MaxDist;
+        var subSamples = j.SubSamples;
+        var subThreshold = j.SubThreshold;
+        var baseJitter = j.BaseJitter;
+        var from = j.Index;
+        var to = slice < 0 ? targets.Count : Math.Min(targets.Count, from + slice);
+        j.Index = to;
+
+        //One progress event per slice, fired here rather than from the chunk workers: this runs on
+        //the window's render thread, so the queued update reaches the sidebar bar at the frame end.
+        if (to > from) ShadowBakeProgress?.Invoke(to, targets.Count);
+
+        System.Threading.Tasks.Parallel.For(from, to, i =>
         {
             var ch = targets[i].Ch;
 
-            var chunkCentre = new Vector3(-ch.Position.Y + cs / 2f, ch.Position.Z, -ch.Position.X + cs / 2f);
-            var local = new List<(Vector3 C, float R)>();
-            foreach (var s in spheres)
-            {
-                float dx = s.C.X - chunkCentre.X, dz = s.C.Z - chunkCentre.Z;
-                if (MathF.Sqrt(dx * dx + dz * dz) > maxDist + cs + s.R) continue;
-                if (Vector3.Dot(s.C - chunkCentre, sun) < -s.R - cs) continue;
-                local.Add(s);
-            }
-            var localBoxes = new List<(Matrix4 Inv, Vector3 Min, Vector3 Max)>();
-            foreach (var b in boxes)
-            {
-                float dx = b.WC.X - chunkCentre.X, dz = b.WC.Z - chunkCentre.Z;
-                if (MathF.Sqrt(dx * dx + dz * dz) > maxDist + cs + b.WR) continue;
-                if (Vector3.Dot(b.WC - chunkCentre, sun) < -b.WR - cs) continue;
-                localBoxes.Add((b.Inv, b.Min, b.Max));
-            }
+            var cc = new Vector3(-ch.Position.Y + cs / 2f, ch.Position.Z, -ch.Position.X + cs / 2f);
 
-            var map = new byte[4096];
-            bool any = false;
+            //Per-chunk broadphase: instance bounds only, then triangles per texel.
+            var localW = new List<ShadowOcc>();
+            var localM = new List<ShadowOcc>();
+            foreach (var m in wmoOcc)
+                if (BakeNear(cc, m, cs, maxDist, sun)) localW.Add(m);
+            foreach (var m in m2Occ)
+                if (BakeNear(cc, m, cs, maxDist, sun)) localM.Add(m);
+            if (localW.Count == 0 && localM.Count == 0) return;
+
+            var old = ch.ShadowMap;
+            var map = old != null ? (byte[])old.Clone() : new byte[4096];
+            bool changedAny = false;
+
             for (int row = 0; row < 64; row++)
             for (int col = 0; col < 64; col++)
             {
+                int idx = row * 64 + col;
+                if (ShadowKeepOld && old != null && old[idx] != 0) continue;
+
                 float gx = -ch.Position.Y + col * texStep;
                 float gz = -ch.Position.X + row * texStep;
                 float gy = HeightAtGL(gx, gz);
                 if (float.IsNaN(gy)) continue;
 
-                if (ch.Liquid is { } lq2)
+                if (ch.Liquid is { } lq && lq.Heights is { } lqh && lqh.Length > 0)
                 {
                     int li = (int)MathF.Round(row / 63f * 8f) * 9 + (int)MathF.Round(col / 63f * 8f);
-                    if (lq2.Heights[li] > gy + 1f) continue;
+                    if (li < lqh.Length && lqh[li] > gy + 1f) continue;
                 }
 
-                int hits = 0;
-                for (int k = 0; k < rays.Length; k++)
-                    if (SunRayOccluded(new Vector3(gx, gy + 0.3f, gz), rays[k], maxDist, local, localBoxes)) hits++;
-                if (hits == 0) continue;
+                var origin = new Vector3(gx, gy + 0.3f, gz);
+                bool shadowed = false;
+                if (!(opt.Terrain && TerrainBlocksRay(origin, sun, 32f)))
+                {
+                    float dist = float.MaxValue;
+                    //PASS 1: WMO only, at the texel centre.
+                    shadowed = SunRayOccluded(opt, origin, sun, maxDist, localW, localM, true, false, out dist);
+                    if (!shadowed && subSamples > 1)
+                    {
+                        //PASS 2: sub-texel samples with alpha-tested foliage.
+                        int totalHits = 0;
+                        float nearest = float.MaxValue;
+                        float cell = texStep / subSamples;
+                        for (int sy = 0; sy < subSamples; sy++)
+                        for (int sx = 0; sx < subSamples; sx++)
+                        {
+                            float px = gx + (sx + 0.5f) * cell;
+                            float pz = gz + (sy + 0.5f) * cell;
+                            float py = HeightAtGL(px, pz);
+                            if (float.IsNaN(py)) continue;
+                            var sub = new Vector3(px, py + 0.3f, pz);
+                            var dir = sun;
+                            if (baseJitter > 0f) dir = JitterBake(dir, (sy * subSamples) + sx, nearest, baseJitter);
+                            float hd;
+                            if (SunRayOccluded(opt, sub, dir, maxDist, localW, localM, false, true, out hd))
+                            {
+                                totalHits++;
+                                if (hd > 0f && hd < nearest) nearest = hd;
+                            }
+                        }
+                        if (totalHits > subThreshold) shadowed = true;
+                    }
+                    else if (!shadowed) shadowed = SunRayOccluded(opt, origin, sun, maxDist, localW, localM, false, true, out dist);
+                }
 
-                float f = hits / (float)rays.Length;
-                if (f > Fbm(gx * 2.1f, gz * 2.1f)) { map[row * 64 + col] = 255; any = true; }
+                byte val = shadowed ? (byte)255 : (byte)0;
+                if (old == null ? val == 0 : old[idx] == val) continue;
+                map[idx] = val;
+                changedAny = true;
             }
-            results[i] = any ? map : null;
+
+            if (!changedAny) return;
+            bool any = false;
+            for (int k = 0; k < 4096 && !any; k++) any = map[k] != 0;
+            ch.ShadowMap = any ? map : null;
+            touched[i] = true;
         });
-
-        for (int i = 0; i < targets.Count; i++)
-            targets[i].Ch.ShadowMap = results[i];
-
-        PushUndo(rec);
-        foreach (var a in adts) { MarkEdited(a); _terrain.RebuildTile(a, _texCache); }
-        Notify?.Invoke($"Baked shadows for {targets.Count} chunk(s) ({spheres.Count} doodad + {boxes.Count} WMO occluders). Ctrl+Z undoes.");
-        return targets.Count;
     }
 
-    private bool SunRayOccluded(Vector3 origin, Vector3 dir, float maxDist,
-                                List<(Vector3 C, float R)> spheres,
-                                List<(Matrix4 Inv, Vector3 Min, Vector3 Max)> boxes)
+    //Closes the job: pushes one undo stroke over everything the rays touched and rebuilds the tiles
+    //whose texels actually changed, so Ctrl+Z can roll a whole multi-frame bake back at once.
+    private int FinishShadowBake()
     {
-        foreach (var (c, r) in spheres)
+        if (_job is not { } j) return 0;
+        var targets = j.Targets;
+
+        //Finish the progress bar: the last event always lands after the workers queued their own.
+        ShadowBakeProgress?.Invoke(targets.Count, targets.Count);
+
+        int baked = 0;
+        var dirty = new HashSet<AdtFile>();
+        for (int i = 0; i < targets.Count; i++)
+            if (j.Touched[i]) { baked++; dirty.Add(targets[i].Adt); }
+
+        //The CPU copies only exist for the rays, so drop them: a streamed map never has to keep
+        //several megabytes of duplicate geometry around once the bake is over.
+        _wmos?.ClearCpuGeometry();
+        _doodads?.ClearCpuGeometry();
+
+        if (baked == 0) { _job = null; Notify?.Invoke("Bake shadows: no occluders found in scope, nothing changed."); return 0; }
+
+        PushUndo(j.Rec);
+        foreach (var a in dirty) { MarkEdited(a); _terrain?.RebuildTile(a, _texCache); }
+        Notify?.Invoke($"Ray-baked {baked} of {targets.Count} chunk(s) ({j.Wmos.Count} WMO + {j.M2s.Count} M2 occluders, " +
+                       $"sun height {ShadowSunHeight}°, rotation {ShadowSunRotation}°, max {ShadowMaxDistance} yd). Ctrl+Z undoes.");
+        _job = null;
+        return baked;
+    }
+
+    //One frame's worth of the pending bake. A few chunks per frame keeps a slice well under the
+    //frame budget while still filling the bar in a meaningful number of steps, and the window
+    //stays interactive and drawn in between.
+    private void StepBakeFrame()
+    {
+        if (_job is not { } j) return;
+        //A bake is tied to the map its chunks came from, and a loaded map invalidates them.
+        if (j.Map != _mapName)
         {
-            var oc = c - origin;
-            float b = Vector3.Dot(oc, dir);
-            if (b < 0f || b > maxDist + r) continue;
-            if (oc.LengthSquared - b * b <= r * r) return true;
+            _job = null;
+            Notify?.Invoke("Bake shadows: the map changed while rays were running, that bake was dropped.");
+            return;
         }
-        foreach (var (inv, mn, mx) in boxes)
+        int remaining = j.Targets.Count - j.Index;
+        //Whole maps bake in a few dozen frames, single chunks in one.
+        int slice = Math.Max(1, remaining / 40);
+        BakeChunks(slice);
+        if (j.Index >= j.Targets.Count) FinishShadowBake();
+    }
+
+    private sealed class ShadowOpt
+    {
+        public bool AlphaTest, SkipTransparent, Terrain;
+        public int AlphaThreshold, SubSamples, SubThreshold;
+        public float Jitter;
+        public Dictionary<string, bool> Blocks = new();
+    }
+
+    private sealed class ShadowOcc
+    {
+        public bool W;
+        public Vector3 WC;
+        public float WR, Scale;
+        public Matrix4 Inv;
+        public float[] V = [];
+        public uint[] Idx = [];
+        public int Stride;
+        public TriRange[] Ranges = [];
+        public float[] BBox = [];
+    }
+
+    private sealed class TriRange
+    {
+        public int Start, Count;
+        public bool Alpha, Blocks;
+        public string Tex = "";
+        public byte[]? Rgba;
+        public int TW, TH;
+    }
+
+    private static float[] BuildTriBoxes(float[] v, uint[] idx, int stride)
+    {
+        int n = idx.Length / 3;
+        var bb = new float[n * 6];
+        for (int t = 0; t < n; t++)
         {
-            var o = Vector3.TransformPosition(origin, inv);
-            var d = Vector3.TransformVector(dir, inv);
-            float t0 = 0.5f, t1 = maxDist;
-            bool miss = false;
-            for (int axis = 0; axis < 3 && !miss; axis++)
+            int ii = t * 3, b = t * 6;
+            int o0 = (int)idx[ii] * stride, o1 = (int)idx[ii + 1] * stride, o2 = (int)idx[ii + 2] * stride;
+            if (o2 + 2 >= v.Length)
             {
-                float od = axis == 0 ? o.X : axis == 1 ? o.Y : o.Z;
-                float dd = axis == 0 ? d.X : axis == 1 ? d.Y : d.Z;
-                float lo = axis == 0 ? mn.X : axis == 1 ? mn.Y : mn.Z;
-                float hi = axis == 0 ? mx.X : axis == 1 ? mx.Y : mx.Z;
-                if (MathF.Abs(dd) < 1e-6f) { if (od < lo || od > hi) miss = true; continue; }
-                float ta = (lo - od) / dd, tb = (hi - od) / dd;
-                if (ta > tb) (ta, tb) = (tb, ta);
-                t0 = MathF.Max(t0, ta); t1 = MathF.Min(t1, tb);
-                if (t0 > t1) miss = true;
+                bb[b] = bb[b + 1] = bb[b + 2] = float.MinValue;
+                bb[b + 3] = bb[b + 4] = bb[b + 5] = float.MaxValue;
+                continue;
             }
-            if (!miss) return true;
+            float minX = v[o0], minY = v[o0 + 1], minZ = v[o0 + 2];
+            float maxX = minX, maxY = minY, maxZ = minZ;
+            foreach (int o in new[] { o1, o2 })
+            {
+                if (v[o] < minX) minX = v[o]; else if (v[o] > maxX) maxX = v[o];
+                if (v[o + 1] < minY) minY = v[o + 1]; else if (v[o + 1] > maxY) maxY = v[o + 1];
+                if (v[o + 2] < minZ) minZ = v[o + 2]; else if (v[o + 2] > maxZ) maxZ = v[o + 2];
+            }
+            bb[b] = minX; bb[b + 1] = minY; bb[b + 2] = minZ;
+            bb[b + 3] = maxX; bb[b + 4] = maxY; bb[b + 5] = maxZ;
         }
-        for (float t = 2f; t < maxDist; t += 1.2f + t * 0.06f)
+        return bb;
+    }
+
+    private static bool BakeNear(Vector3 cc, ShadowOcc m, float cs, float maxDist, Vector3 sun)
+    {
+        float dx = m.WC.X - cc.X, dy = m.WC.Y - cc.Y, dz = m.WC.Z - cc.Z;
+        float r = maxDist + cs + m.WR;
+        if (dx * dx + dy * dy + dz * dz > r * r) return false;
+        return dx * sun.X + dy * sun.Y + dz * sun.Z >= -m.WR - cs;
+    }
+
+    private static Vector3 JitterBake(Vector3 dir, int seed, float dist, float baseJitter)
+    {
+        float amt = dist > 0f && dist < float.MaxValue ? baseJitter * dist : 0.02f;
+        if (amt <= 0f) return dir;
+        var j = dir + new Vector3(MathF.Sin(seed * 1.234f), MathF.Cos(seed * 5.678f), MathF.Sin(seed * 9.012f)) * amt;
+        return j.X * j.X + j.Y * j.Y + j.Z * j.Z < 1e-9f ? dir : Vector3.Normalize(j);
+    }
+
+    private bool TerrainBlocksRay(Vector3 origin, Vector3 dir, float maxT)
+    {
+        for (float t = 1.5f; t < maxT; t += 1f + t * 0.06f)
         {
             float px = origin.X + dir.X * t, py = origin.Y + dir.Y * t, pz = origin.Z + dir.Z * t;
             float h = HeightAtGL(px, pz);
-            if (!float.IsNaN(h) && h > py + 0.45f) return true;
+            if (!float.IsNaN(h) && h > py + 0.5f) return true;
+        }
+        return false;
+    }
+
+    private static bool AlphaCoverage(byte[]? rgba, int w, int h, int threshold)
+    {
+        if (rgba == null || w <= 0 || h <= 0) return true;
+        int stepX = Math.Max(1, w / 16), stepY = Math.Max(1, h / 16);
+        int samples = 0, solid = 0;
+        for (int y = 0; y < h; y += stepY)
+            for (int x = 0; x < w; x += stepX)
+            {
+                int ai = (y * w + x) * 4 + 3;
+                if (ai >= rgba.Length) continue;
+                samples++;
+                if (rgba[ai] >= threshold) solid++;
+            }
+        if (samples == 0) return true;
+        return solid * 100 >= samples * 3;
+    }
+
+    private bool SunRayOccluded(ShadowOpt opt, Vector3 origin, Vector3 dir, float maxDist,
+                                 List<ShadowOcc> w, List<ShadowOcc> m, bool wmoOnly, bool alphaTest, out float dist)
+    {
+        dist = -1f;
+        //The alpha-test checkbox gates per-texel alpha sampling; with it off, alpha-tested
+        //geometry (leaves, fences) is treated as fully solid.
+        bool sample = alphaTest && opt.AlphaTest;
+        foreach (var occ in w)
+            if (RayOccludes(opt, occ, origin, dir, maxDist, sample, out dist)) return true;
+        if (!wmoOnly)
+            foreach (var occ in m)
+                if (RayOccludes(opt, occ, origin, dir, maxDist, sample, out dist)) return true;
+        return false;
+    }
+
+    private static bool RayOccludes(ShadowOpt opt, ShadowOcc occ, Vector3 origin, Vector3 dir, float maxDist,
+                                     bool alphaTest, out float dist)
+    {
+        dist = -1f;
+        float wx = occ.WC.X - origin.X, wy = occ.WC.Y - origin.Y, wz = occ.WC.Z - origin.Z;
+        float along = wx * dir.X + wy * dir.Y + wz * dir.Z;
+        float tClosest = along < 0f ? 0f : along > maxDist ? maxDist : along;
+        float cx = wx - dir.X * tClosest, cy = wy - dir.Y * tClosest, cz = wz - dir.Z * tClosest;
+        if (cx * cx + cy * cy + cz * cz > occ.WR * occ.WR) return false;
+
+        var lo = Vector3.TransformPosition(origin, occ.Inv);
+        var ld = Vector3.TransformVector(dir, occ.Inv);
+        float lox = lo.X, loy = lo.Y, loz = lo.Z;
+        float ldx = ld.X, ldy = ld.Y, ldz = ld.Z;
+        float scale = occ.Scale <= 0f ? 1f : occ.Scale;
+        float maxLocal = maxDist / scale;
+
+        var v = occ.V;
+        var idx = occ.Idx;
+        var bb = occ.BBox;
+        int stride = occ.Stride, nTri = idx.Length / 3;
+        foreach (var rg in occ.Ranges)
+        {
+            if (opt.SkipTransparent && !rg.Blocks) continue;
+            bool sampleAlpha = rg.Alpha && alphaTest;
+            byte[] rgba = rg.Rgba ?? new byte[0];
+            int tw = rg.TW, th = rg.TH;
+            if (sampleAlpha && (rgba.Length < 4 || tw <= 0 || th <= 0)) sampleAlpha = false;
+
+            int last = Math.Min(rg.Start + rg.Count, idx.Length);
+            for (int ii = rg.Start; ii + 2 < last; ii += 3)
+            {
+                int tri = ii / 3;
+                if (bb != null && tri < nTri)
+                {
+                    int b = tri * 6;
+                    float t0 = 0f, t1 = maxLocal;
+                    bool miss = false;
+                    for (int ax = 0; ax < 3 && !miss; ax++)
+                    {
+                        float od = ax == 0 ? lox : ax == 1 ? loy : loz;
+                        float dd = ax == 0 ? ldx : ax == 1 ? ldy : ldz;
+                        float blo = bb[b + ax], bhi = bb[b + 3 + ax];
+                        if (MathF.Abs(dd) < 1e-6f) { if (od < blo || od > bhi) miss = true; continue; }
+                        float ta = (blo - od) / dd, tb = (bhi - od) / dd;
+                        if (ta > tb) (ta, tb) = (tb, ta);
+                        if (ta > t0) t0 = ta;
+                        if (tb < t1) t1 = tb;
+                        if (t0 > t1) miss = true;
+                    }
+                    if (miss) continue;
+                }
+
+                uint i0 = idx[ii], i1 = idx[ii + 1], i2 = idx[ii + 2];
+                int o0 = (int)i0 * stride, o1 = (int)i1 * stride, o2 = (int)i2 * stride;
+                if (o2 + 7 >= v.Length) continue;
+
+                float axx = v[o0], ayy = v[o0 + 1], azz = v[o0 + 2];
+                float e1x = v[o1] - axx, e1y = v[o1 + 1] - ayy, e1z = v[o1 + 2] - azz;
+                float e2x = v[o2] - axx, e2y = v[o2 + 1] - ayy, e2z = v[o2 + 2] - azz;
+                float px = ldy * e2z - ldz * e2y, py = ldz * e2x - ldx * e2z, pz = ldx * e2y - ldy * e2x;
+                float det = e1x * px + e1y * py + e1z * pz;
+                if (det > -1e-7f && det < 1e-7f) continue;
+                float invDet = 1f / det;
+
+                float sx = lox - axx, sy = loy - ayy, sz = loz - azz;
+                float u = (sx * px + sy * py + sz * pz) * invDet;
+                if (u < 0f || u > 1f) continue;
+                float qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+                float vv = (ldx * qx + ldy * qy + ldz * qz) * invDet;
+                if (vv < 0f || u + vv > 1f) continue;
+                float t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+                if (t < 0.05f || t > maxLocal) continue;
+
+                if (sampleAlpha)
+                {
+                    float u0 = v[o0 + 6], u1 = v[o1 + 6], u2 = v[o2 + 6];
+                    float w0 = v[o0 + 7], w1 = v[o1 + 7], w2 = v[o2 + 7];
+                    if (u0 != 0f || u1 != 0f || u2 != 0f || w0 != 0f || w1 != 0f || w2 != 0f)
+                    {
+                        float bw = 1f - u - vv;
+                        float hu = bw * u0 + u * u1 + vv * u2;
+                        float hv = bw * w0 + u * w1 + vv * w2;
+                        int tx = (int)((hu - MathF.Floor(hu)) * tw);
+                        int ty = (int)((hv - MathF.Floor(hv)) * th);
+                        if (tx < 0) tx = 0; else if (tx >= tw) tx = tw - 1;
+                        if (ty < 0) ty = 0; else if (ty >= th) ty = th - 1;
+                        int ai = (ty * tw + tx) * 4 + 3;
+                        if (ai >= rgba.Length || rgba[ai] < opt.AlphaThreshold) continue;
+                    }
+                }
+
+                dist = t * scale;
+                return true;
+            }
         }
         return false;
     }
