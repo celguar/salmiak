@@ -37,7 +37,7 @@ public partial class MainWindow
 
         var rot = MakeSlider("Sun rotation", 0, 360, 34, "°");
         var height = MakeSlider("Sun height", -80, 80, 30, "°");
-        var maxDist = MakeSlider("Max shadow length", 20, 400, 150, " yd");
+        var maxDist = MakeSlider("Max shadow length", 20, 600, 250, " yd");
         var alphaThresh = MakeSlider("Alpha threshold", 0, 255, 200, "");
         var samples = MakeSlider("Softness samples", 1, 8, 3, "x");
         var hitThresh = MakeSlider("Hit threshold", 1, 48, 1, "");

@@ -74,7 +74,11 @@ public sealed partial class GlViewport
     public float ShadowSunRotation { get; set; } = 34f;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
-    public float ShadowMaxDistance { get; set; } = 150f;
+    //In ADT units, so 250 is 7.5 chunks of reach. WoW Viewer's own default, 150, only reaches 4.5
+    //chunks and clips the crown of the taller trees: at the retail sun, a shadow runs about as far
+    //above the ground as the object is tall. Longer rays also mean more work for texels that have
+    //nothing near them, so raise it only as far as the scenery actually needs.
+    public float ShadowMaxDistance { get; set; } = 250f;
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public bool ShadowDoodads { get; set; } = true;
@@ -309,6 +313,8 @@ public sealed partial class GlViewport
         public float MaxDist, Cs, TexStep, BaseJitter;
         public int SubSamples, SubThreshold;
         public int Index;
+        //Current slice size, in chunks; 0 until the first slice has been timed.
+        public int Slice;
         public string Map = "";
     };
 
@@ -370,6 +376,12 @@ public sealed partial class GlViewport
         var wmoOcc = new List<ShadowOcc>();
         var m2Occ = new List<ShadowOcc>();
         var wmoTex = new Dictionary<string, (byte[] Rgba, int W, int H)>(StringComparer.OrdinalIgnoreCase);
+        //A model's own triangles, texture ranges and per-triangle boxes are the same for every
+        //placement of it, and a forest reuses the same tree hundreds of times, so parse them into
+        //one template per geometry and stamp a cheap placement copy off it. Both dictionaries key
+        //on the cached geometry object, which the renderers hand back unchanged for a repeated path.
+        var wmoTpl = new Dictionary<WmoFile.Group, ShadowOcc>();
+        var m2Tpl = new Dictionary<Salmiak.Rendering.DoodadRenderer.CpuModel, ShadowOcc>();
 
         if (ShadowWmos && _wmos != null && _mpq != null)
             foreach (var kv in _tileCache)
@@ -389,29 +401,35 @@ public sealed partial class GlViewport
                     foreach (var grp in groups)
                     {
                         if (grp.Vertices.Length < WmoFile.GroupVertexStride || grp.Indices.Length < 3) continue;
-                        var ranges = new List<TriRange>(grp.Batches.Count);
-                        foreach (var bt in grp.Batches)
+                        if (!wmoTpl.TryGetValue(grp, out var tpl))
                         {
-                            if (bt.IndexCount < 3) continue;
-                            var tr = new TriRange { Start = bt.IndexStart, Count = bt.IndexCount, Alpha = bt.AlphaTest, Tex = bt.TexturePath ?? "" };
-                            if (tr.Alpha && tr.Tex.Length > 0)
+                            var ranges = new List<TriRange>(grp.Batches.Count);
+                            foreach (var bt in grp.Batches)
                             {
-                                if (!wmoTex.TryGetValue(tr.Tex, out var dec))
+                                if (bt.IndexCount < 3) continue;
+                                var tr = new TriRange { Start = bt.IndexStart, Count = bt.IndexCount, Alpha = bt.AlphaTest, Tex = bt.TexturePath ?? "" };
+                                if (tr.Alpha && tr.Tex.Length > 0)
                                 {
-                                    dec = (new byte[0], 0, 0);
-                                    try { using var ts = _mpq!.OpenFile(tr.Tex.Replace('/', '\\')); dec = BlpReader.Decode(ts); }
-                                    catch { }
-                                    wmoTex[tr.Tex] = dec;
+                                    if (!wmoTex.TryGetValue(tr.Tex, out var dec))
+                                    {
+                                        dec = (new byte[0], 0, 0);
+                                        try { using var ts = _mpq!.OpenFile(tr.Tex.Replace('/', '\\')); dec = BlpReader.Decode(ts); }
+                                        catch { }
+                                        wmoTex[tr.Tex] = dec;
+                                    }
+                                    var (decRgba, decW, decH) = dec;
+                                    tr.Rgba = decRgba; tr.TW = decW; tr.TH = decH;
                                 }
-                                var (decRgba, decW, decH) = dec;
-                                tr.Rgba = decRgba; tr.TW = decW; tr.TH = decH;
+                                ranges.Add(tr);
                             }
-                            ranges.Add(tr);
+                            tpl = wmoTpl[grp] = new ShadowOcc { W = true, V = grp.Vertices, Idx = grp.Indices,
+                                                                Stride = WmoFile.GroupVertexStride, Ranges = ranges.ToArray() };
+                            tpl.BBox = BuildTriBoxes(tpl.V, tpl.Idx, tpl.Stride);
                         }
-                        var occ = new ShadowOcc { W = true, WC = wcr, WR = wr, Scale = 1f, Inv = winv, V = grp.Vertices,
-                                                   Idx = grp.Indices, Stride = WmoFile.GroupVertexStride, Ranges = ranges.ToArray() };
-                        occ.BBox = BuildTriBoxes(occ.V, occ.Idx, occ.Stride);
-                        wmoOcc.Add(occ);
+                        if (tpl.Ranges.Length == 0) continue;
+                        wmoOcc.Add(new ShadowOcc { W = true, WC = wcr, WR = wr, Scale = 1f, Inv = winv,
+                                                   V = tpl.V, Idx = tpl.Idx, Stride = tpl.Stride,
+                                                   Ranges = tpl.Ranges, BBox = tpl.BBox });
                     }
                 }
             }
@@ -428,27 +446,32 @@ public sealed partial class GlViewport
                     if (cm == null || cm.Indices.Length < 3 || cm.Submeshes.Length == 0) continue;
                     if (!_doodads.TryGetModelBounds(d.ModelPath, out var mcen, out var mrad)) continue;
                     var dxf = Salmiak.Rendering.DoodadRenderer.BuildTransform(d);
+                    if (!m2Tpl.TryGetValue(cm, out var tpl))
+                    {
+                        var ranges = new List<TriRange>(cm.Submeshes.Length);
+                        foreach (var sm in cm.Submeshes)
+                        {
+                            if (sm.Count < 3) continue;
+                            var tex = sm.Tex ?? "";
+                            var tr = new TriRange { Start = sm.Start, Count = sm.Count, Alpha = true, Tex = tex };
+                            if (tex.Length > 0 && cm.Textures.TryGetValue(tex, out var ct))
+                            {
+                                var (ctRgba, ctW, ctH) = ct;
+                                tr.Rgba = ctRgba; tr.TW = ctW; tr.TH = ctH;
+                            }
+                            ranges.Add(tr);
+                        }
+                        tpl = m2Tpl[cm] = new ShadowOcc { W = false, V = cm.Vertices, Idx = cm.Indices,
+                                                          Stride = 8, Ranges = ranges.ToArray() };
+                        tpl.BBox = BuildTriBoxes(tpl.V, tpl.Idx, tpl.Stride);
+                    }
+                    if (tpl.Ranges.Length == 0) continue;
                     var dcen = Vector3.TransformPosition(mcen, dxf);
                     float dr = Math.Max(0.5f, mrad * Math.Abs(d.Scale));
-                    var ranges = new List<TriRange>(cm.Submeshes.Length);
-                    foreach (var sm in cm.Submeshes)
-                    {
-                        if (sm.Count < 3) continue;
-                        var tex = sm.Tex ?? "";
-                        var tr = new TriRange { Start = sm.Start, Count = sm.Count, Alpha = true, Tex = tex };
-                        if (tex.Length > 0 && cm.Textures.TryGetValue(tex, out var ct))
-                        {
-                            var (ctRgba, ctW, ctH) = ct;
-                            tr.Rgba = ctRgba; tr.TW = ctW; tr.TH = ctH;
-                        }
-                        ranges.Add(tr);
-                    }
-                    if (ranges.Count == 0) continue;
-                    var occ = new ShadowOcc { W = false, WC = dcen, WR = dr, Scale = Math.Abs(d.Scale) < 1e-4f ? 1f : d.Scale,
-                                              Inv = dxf.Inverted(), V = cm.Vertices, Idx = cm.Indices, Stride = 8,
-                                              Ranges = ranges.ToArray() };
-                    occ.BBox = BuildTriBoxes(occ.V, occ.Idx, occ.Stride);
-                    m2Occ.Add(occ);
+                    m2Occ.Add(new ShadowOcc { W = false, WC = dcen, WR = dr, Inv = dxf.Inverted(),
+                                              Scale = Math.Abs(d.Scale) < 1e-4f ? 1f : d.Scale,
+                                              V = tpl.V, Idx = tpl.Idx, Stride = tpl.Stride,
+                                              Ranges = tpl.Ranges, BBox = tpl.BBox });
                 }
             }
 
@@ -522,7 +545,8 @@ public sealed partial class GlViewport
 
     //Tiles whose geometry can reach those chunks: the tiles the chunks live in, padded by the ray
     //length because a shadow crosses a tile border. Only these get their WMO/M2 geometry parsed,
-    //which is what keeps baking a handful of chunks snappy in a streamed map.
+    //which is what keeps baking a handful of chunks snappy in a streamed map. One tile is 533 yd,
+    //so any reach up to that (the sidebar's 250 default included) still pads by exactly one ring.
     private HashSet<(int X, int Y)> BakeTilesInReach(List<(AdtFile Adt, MapChunk Ch)> targets, float maxDist)
     {
         const float tileSize = AdtFile.TileSize;
@@ -541,8 +565,9 @@ public sealed partial class GlViewport
     }
 
     //Runs one slice of the pending job: slice chunks worth of rays (-1 = every remaining chunk),
-    //in parallel. The viewport render loop calls it a few chunks per frame, so the window keeps
-    //drawing between slices and only the chunk work below has to stay untouched.
+    //in parallel, and each chunk's grid in parallel row bands when the slice is too short to fill
+    //the cores by itself. The viewport render loop calls it a few chunks per frame, so the window
+    //keeps drawing between slices and only the chunk work below has to stay untouched.
     private void BakeChunks(int slice)
     {
         if (_job is not { } j) return;
@@ -583,69 +608,81 @@ public sealed partial class GlViewport
 
             var old = ch.ShadowMap;
             var map = old != null ? (byte[])old.Clone() : new byte[4096];
-            bool changedAny = false;
 
-            for (int row = 0; row < 64; row++)
-            for (int col = 0; col < 64; col++)
+            //Aim at ~16 ray tasks whatever the slice holds: a one-chunk pick would otherwise run its
+            //4096 rays on a single core, while a whole tile's chunks already fill the pool by
+            //themselves. Bands write disjoint row ranges of map, so the grid stays race-free.
+            var bands = Math.Clamp(16 / Math.Max(1, to - from), 1, 16);
+            System.Threading.Tasks.Parallel.For(0, bands, b =>
             {
-                int idx = row * 64 + col;
-                if (ShadowKeepOld && old != null && old[idx] != 0) continue;
-
-                float gx = -ch.Position.Y + col * texStep;
-                float gz = -ch.Position.X + row * texStep;
-                float gy = HeightAtGL(gx, gz);
-                if (float.IsNaN(gy)) continue;
-
-                if (ch.Liquid is { } lq && lq.Heights is { } lqh && lqh.Length > 0)
+                for (int row = b * 64 / bands; row < (b + 1) * 64 / bands; row++)
+                for (int col = 0; col < 64; col++)
                 {
-                    int li = (int)MathF.Round(row / 63f * 8f) * 9 + (int)MathF.Round(col / 63f * 8f);
-                    if (li < lqh.Length && lqh[li] > gy + 1f) continue;
-                }
+                    int idx = row * 64 + col;
+                    if (ShadowKeepOld && old != null && old[idx] != 0) continue;
 
-                var origin = new Vector3(gx, gy + 0.3f, gz);
-                bool shadowed = false;
-                if (!(opt.Terrain && TerrainBlocksRay(origin, sun, 32f)))
-                {
-                    float dist = float.MaxValue;
-                    //PASS 1: WMO only, at the texel centre.
-                    shadowed = SunRayOccluded(opt, origin, sun, maxDist, localW, localM, true, false, out dist);
-                    if (!shadowed && subSamples > 1)
+                    float gx = -ch.Position.Y + col * texStep;
+                    float gz = -ch.Position.X + row * texStep;
+                    float gy = HeightAtGL(gx, gz);
+                    if (float.IsNaN(gy)) continue;
+
+                    //Water is deliberately not consulted here. The lake bed is lit like any other
+                    //ground in the client's own MCSH payloads, so a submerged texel keeps the shadow
+                    //its bank casts on it; skipping it leaves a crisp shadow edge at the shoreline,
+                    //which is not what the 1.12 tiles have. The heightmap only decides where a ray
+                    //starts, and the sole texels left out are those with no height to start at.
+                    var origin = new Vector3(gx, gy + 0.3f, gz);
+                    bool shadowed = false;
+                    if (!(opt.Terrain && TerrainBlocksRay(origin, sun, 32f)))
                     {
-                        //PASS 2: sub-texel samples with alpha-tested foliage.
-                        int totalHits = 0;
-                        float nearest = float.MaxValue;
-                        float cell = texStep / subSamples;
-                        for (int sy = 0; sy < subSamples; sy++)
-                        for (int sx = 0; sx < subSamples; sx++)
+                        float dist = float.MaxValue;
+                        //PASS 1: WMO only, at the texel centre.
+                        shadowed = SunRayOccluded(opt, origin, sun, maxDist, localW, localM, true, false, out dist);
+                        if (!shadowed && subSamples > 1)
                         {
-                            float px = gx + (sx + 0.5f) * cell;
-                            float pz = gz + (sy + 0.5f) * cell;
-                            float py = HeightAtGL(px, pz);
-                            if (float.IsNaN(py)) continue;
-                            var sub = new Vector3(px, py + 0.3f, pz);
-                            var dir = sun;
-                            if (baseJitter > 0f) dir = JitterBake(dir, (sy * subSamples) + sx, nearest, baseJitter);
-                            float hd;
-                            if (SunRayOccluded(opt, sub, dir, maxDist, localW, localM, false, true, out hd))
+                            //PASS 2: sub-texel samples with alpha-tested foliage.
+                            int totalHits = 0;
+                            float nearest = float.MaxValue;
+                            float cell = texStep / subSamples;
+                            for (int sy = 0; sy < subSamples; sy++)
+                            for (int sx = 0; sx < subSamples; sx++)
                             {
-                                totalHits++;
-                                if (hd > 0f && hd < nearest) nearest = hd;
+                                float px = gx + (sx + 0.5f) * cell;
+                                float pz = gz + (sy + 0.5f) * cell;
+                                float py = HeightAtGL(px, pz);
+                                if (float.IsNaN(py)) continue;
+                                var sub = new Vector3(px, py + 0.3f, pz);
+                                var dir = sun;
+                                if (baseJitter > 0f) dir = JitterBake(dir, (sy * subSamples) + sx, nearest, baseJitter);
+                                float hd;
+                                if (SunRayOccluded(opt, sub, dir, maxDist, localW, localM, false, true, out hd))
+                                {
+                                    totalHits++;
+                                    if (hd > 0f && hd < nearest) nearest = hd;
+                                }
                             }
+                            if (totalHits > subThreshold) shadowed = true;
                         }
-                        if (totalHits > subThreshold) shadowed = true;
+                        else if (!shadowed) shadowed = SunRayOccluded(opt, origin, sun, maxDist, localW, localM, false, true, out dist);
                     }
-                    else if (!shadowed) shadowed = SunRayOccluded(opt, origin, sun, maxDist, localW, localM, false, true, out dist);
-                }
 
-                byte val = shadowed ? (byte)255 : (byte)0;
-                if (old == null ? val == 0 : old[idx] == val) continue;
-                map[idx] = val;
-                changedAny = true;
+                    byte val = shadowed ? (byte)255 : (byte)0;
+                    if (old == null ? val == 0 : old[idx] == val) continue;
+                    map[idx] = val;
+                }
+            });
+
+            //What moved comes from diffing the grid once instead of a flag inside the ray loop,
+            //because the bands write it at the same time. 4096 bytes is nothing next to the rays.
+            bool changedAny = false;
+            bool any = false;
+            for (int k = 0; k < 4096; k++)
+            {
+                if (map[k] != 0) any = true;
+                if (old == null ? map[k] != 0 : map[k] != old[k]) changedAny = true;
             }
 
             if (!changedAny) return;
-            bool any = false;
-            for (int k = 0; k < 4096 && !any; k++) any = map[k] != 0;
             ch.ShadowMap = any ? map : null;
             touched[i] = true;
         });
@@ -681,9 +718,10 @@ public sealed partial class GlViewport
         return baked;
     }
 
-    //One frame's worth of the pending bake. A few chunks per frame keeps a slice well under the
-    //frame budget while still filling the bar in a meaningful number of steps, and the window
-    //stays interactive and drawn in between.
+    //One frame's worth of the pending bake. The slice is sized from what the last one cost rather
+    //than a fixed step count: a 100-chunk selection would otherwise spend most of its wall clock
+    //in a hundred redraws instead of in rays, while a whole map would freeze the window on one
+    //enormous slice. Sizing by milliseconds keeps the bar moving and the redraws cheap.
     private void StepBakeFrame()
     {
         if (_job is not { } j) return;
@@ -695,9 +733,16 @@ public sealed partial class GlViewport
             return;
         }
         int remaining = j.Targets.Count - j.Index;
-        //Whole maps bake in a few dozen frames, single chunks in one.
-        int slice = Math.Max(1, remaining / 40);
+        if (remaining <= 0) { FinishShadowBake(); return; }
+        //First slice still guesses from the chunk count; afterwards it comes from measured cost.
+        int slice = j.Slice > 0 ? j.Slice : Math.Max(1, remaining / 40);
+        slice = Math.Min(slice, remaining);
+        long t0 = _sw.ElapsedTicks;
         BakeChunks(slice);
+        double spent = Math.Max(1d, (_sw.ElapsedTicks - t0) * 1000d / Stopwatch.Frequency);
+        //Scale the next slice to about 12 ms of rays, which keeps a frame's worth of bake near the
+        //frame budget whatever the chunks happen to cost in this part of the map.
+        j.Slice = Math.Clamp((int)(slice * 12d / spent + 0.5d), 1, 1024);
         if (j.Index >= j.Targets.Count) FinishShadowBake();
     }
 

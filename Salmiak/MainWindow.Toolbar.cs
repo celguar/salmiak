@@ -144,7 +144,8 @@ SHADOWS
    Esc or Ctrl+I again leaves the tool   ·   the Bake button bakes what you picked
    shadows are traced against real WMO + M2 triangles; Ctrl+Z undoes one bake
    clicking chunks never sculpts: while the picker is open the brush stays off
-   sun height 30° / rotation 34° and alpha 200 match the shadows in the retail client
+   sun height 30° / rotation 34°, alpha 200 and a 250 yd reach match the retail client's own shadows
+   water is not a blocker: lake beds and shorelines get the shadow their bank casts on them
    the bake runs chunk by chunk between frames, so the sidebar bar moves while it works
    Ctrl+M switches the tool to the freehand shadow brush (same sidebar)
 

@@ -138,7 +138,7 @@ public partial class MainWindow
         Section("Sun & rays");
         Make("Sun height", 0, -80, 80, "°");
         Make("Sun rotation", 1, 0, 360, "°");
-        Make("Max length", 2, 20, 400, " yd");
+        Make("Max length", 2, 20, 600, " yd");
         Make("Alpha cutoff", 3, 0, 255, "");
         Make("Softness", 4, 1, 8, "x");
         Make("Hit limit", 5, 1, 48, "");
