@@ -19,6 +19,13 @@ public sealed partial class GlViewport
 
     public event Action? NpcModeEntered;
 
+    // Which classic sequence the shown creatures play (-1 = each model's first sequence that has
+    // a length). Only the GPU pose is affected: the shadow baker reads the CPU geometry, which
+    // always stays in the bind pose.
+    public int NpcSequence { get; set; } = -1;
+
+    public bool NpcAnimation { get; set; } = true;
+
     private Salmiak.Core.Formats.CreatureModels? _creatureModels;
     private int _npcCount;
     private readonly List<NpcSpawn> _npcShown = new();
@@ -68,9 +75,12 @@ public sealed partial class GlViewport
             _npcShown.Add(s);
         }
         _doodads.SetNpcs(defs);
+        _doodads.AnimateNpcs = NpcAnimation;
+        _doodads.NpcSequence = NpcSequence;
         _npcCount = defs.Count;
         Notify?.Invoke($"NPC view - {defs.Count} spawn(s) shown" +
-                       (unresolved > 0 ? $", {unresolved} with unknown display ids skipped." : "."));
+                       (unresolved > 0 ? $", {unresolved} with unknown display ids skipped." : ".") +
+                       (NpcAnimation ? $" Rigged models play sequence {(NpcSequence >= 0 ? NpcSequence.ToString() : "the first available")}." : ""));
         ModeChanged?.Invoke(ModeLabel());
     }
 

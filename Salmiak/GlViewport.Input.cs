@@ -64,6 +64,8 @@ public sealed partial class GlViewport
 
     private bool _prevL;
 
+    private bool _prevV;
+
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public bool ModalOpen { get; set; }
 
@@ -323,6 +325,18 @@ public sealed partial class GlViewport
             DoodadArmed?.Invoke(_placeDoodad ?? "");
         }
         _prevL = lNow;
+
+        // Doodads playing their own animation is a view-wide switch, so it is offered outside the
+        // doodad mode as well: switching it off draws every model in the bind pose with
+        // unscrolled texture coordinates, which is how the baked shadows were ray-traced.
+        bool vNow = IsKeyDown(Keys.V) && !ctrl;
+        if (vNow && !_prevV)
+        {
+            DoodadAnimation = !DoodadAnimation;
+            DoodadAnimationChanged?.Invoke(DoodadAnimation);
+            Notify?.Invoke(DoodadAnimation ? "Doodad animation ON" : "Doodad animation off");
+        }
+        _prevV = vNow;
 
         bool nNow = IsKeyDown(Keys.N) && !ctrl;
         bool nEdge = nNow && !_prevN && !ModalOpen;

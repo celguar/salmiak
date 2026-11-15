@@ -104,7 +104,7 @@ public sealed partial class GlViewport
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
 
         float aspect = Width > 0 && Height > 0 ? (float)Width / Height : 1f;
-        if (_doodads != null) _doodads.Highlight = DoodadMode;
+        if (_doodads != null) { _doodads.Highlight = DoodadMode; _doodads.AnimateDoodads = DoodadAnimation; }
         if (_wmos != null) _wmos.Highlight = WmoMode;
         if (_terrain != null) _terrain.HighlightLiquids = LiquidMode;
         _sky?.Render(_camera, aspect);

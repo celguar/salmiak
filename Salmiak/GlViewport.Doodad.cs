@@ -58,6 +58,14 @@ public sealed partial class GlViewport
     public bool AlignToNormal { get; set; }
     public event Action<bool>? AlignToNormalChanged;
 
+    // Whether the doodads play their own animation: rigged models get posed by their bones and
+    // models whose texture units scroll get their texture coordinates scrolled. The baked shadows
+    // are ray-traced from the CPU geometry, which always stays in the bind pose, so this only
+    // changes how the models are drawn and never how their shadows look.
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public bool DoodadAnimation { get; set; } = true;
+    public event Action<bool>? DoodadAnimationChanged;
+
     private void RollRandomYaw() => _placeYaw = (float)(_rng.NextDouble() * RandomRotationRange);
 
     public List<string> AvailableDoodads()

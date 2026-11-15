@@ -72,5 +72,6 @@
 ## View and misc
 
 * **Minimap** `[M]`, **wireframe** `[F]`, **debug views** `[G]`, **doodads on / off** `[T]`, **WMOs on / off** `[Y]`.
+* **Doodad animation on / off** `[V]`.
 * **Undo** `[Ctrl+Z]` / **redo** `[Ctrl+Y]`, **screenshot to clipboard** `[Ctrl+Shift+P]`, **full key sheet** `[F1]`.
 * **Custom MPQ reader;** load / unload archives, and the database connection panel (File menu).

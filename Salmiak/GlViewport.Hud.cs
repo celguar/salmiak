@@ -228,7 +228,7 @@ public sealed partial class GlViewport
                 return $"Placing: {System.IO.Path.GetFileNameWithoutExtension(_placeDoodad)}" +
                        (RandomRotation ? "  [random yaw]" : "") + (AlignToNormal ? "  [align ground]" : "") + "\n" +
                        "LMB place   PgUp/PgDn lift   O collide   R random yaw   L align ground   Esc cancel";
-            return "Doodad mode\nclick select   Shift+click multi-select   drag center/axes move, rings rotate, scale   Del delete   Ctrl+C/V copy/paste   RMB menu   N search drawer   Ctrl+D exit";
+            return "Doodad mode\nclick select   Shift+click multi-select   drag center/axes move, rings rotate, scale   Del delete   Ctrl+C/V copy/paste   RMB menu   N search drawer   V animate doodads on/off   Ctrl+D exit";
         }
         if (TextureMode)
         {
@@ -274,12 +274,14 @@ public sealed partial class GlViewport
                    "click a liquid to select its whole body   Ctrl+N / middle-click pick a liquid to place   Ctrl+U exit";
         }
         if (NpcMode)
-            return $"NPC view - {_npcCount} creature spawn(s) from the world database\n" +
+            return $"NPC view - {_npcCount} creature spawn(s) from the world database - rigged models play "
+                   + (NpcAnimation ? (NpcSequence >= 0 ? $"sequence {NpcSequence}" : "their first animated sequence") : "no animation (bind pose)")
+                   + $"\n" +
                    "click an NPC = select + show its patrol   ·   click a waypoint = details   ·   Esc = step out / exit   ·   RMB look   WASD move";
         if (HerbMode)
             return $"Herb/Vein view - {_herbShown.Count} gathering node(s) from the world database\n" +
                    "click a node = select + details (others dim)   ·   Esc = deselect / exit   ·   RMB look   WASD move";
-        return "WASD move   RMB look   SCROLL speed   F wire   G debug   T doodads   Y WMOs   B flight paths   Ctrl+E edit   Ctrl+T texture   Ctrl+D doodads   Ctrl+W WMOs";
+        return "WASD move   RMB look   SCROLL speed   F wire   G debug   T doodads   Y WMOs   B flight paths   V animate doodads   Ctrl+E edit   Ctrl+T texture   Ctrl+D doodads   Ctrl+W WMOs";
     }
 
     private string BuildLayerInfo()
