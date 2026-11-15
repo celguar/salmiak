@@ -23,7 +23,7 @@ public sealed class TerrainRenderer : IDisposable
     private int _uMVP, _uNLayers, _uDebug, _uHasShadow, _uIsolate;
     private int _uTex0, _uTex1, _uTex2, _uTex3;
     private int _uAlpha1, _uAlpha2, _uAlpha3, _uShadow;
-    private int _uCamPos, _uFogColor, _uFogRange, _uLightTint, _uFlatLight;
+    private int _uCamPos, _uFogColor, _uFogRange, _uLightTint, _uFlatLight, _uShadowHi;
 
     private struct ChunkDraw
     {
@@ -40,6 +40,11 @@ public sealed class TerrainRenderer : IDisposable
     private int _waterShader, _uWaterMVP, _uWaterCamPos, _uWaterFogColor, _uWaterFogRange, _uWaterHighlight;
 
     public bool HighlightLiquids { get; set; }
+
+    //Display-only helper for the shadow sidebar: shadowed ground is tinted dark violet in the
+    //terrain shader instead of the subtle Blizzard dimming, so the shape of a bake is readable at a
+    //glance. It never touches the MCSH data, so exports stay exactly gamelike.
+    public bool HighlightShadows { get; set; }
     private const int WaterStride = 4 * sizeof(float);
 
     private sealed class Tile
@@ -335,6 +340,7 @@ public sealed class TerrainRenderer : IDisposable
         var tint = SceneEnv.LightTint;
         GL.Uniform3(_uLightTint, ref tint);
         GL.Uniform1(_uFlatLight, FlatLight ? 1 : 0);
+        GL.Uniform1(_uShadowHi, HighlightShadows ? 1 : 0);
         int fb = Fallback();
 
         foreach (var tile in visible)
@@ -532,6 +538,7 @@ public sealed class TerrainRenderer : IDisposable
         _uFogRange = GL.GetUniformLocation(_shader, "uFogRange");
         _uLightTint = GL.GetUniformLocation(_shader, "uLightTint");
         _uFlatLight = GL.GetUniformLocation(_shader, "uFlatLight");
+        _uShadowHi = GL.GetUniformLocation(_shader, "uShadowHi");
     }
 
     private static int CreateShader()
@@ -565,10 +572,16 @@ public sealed class TerrainRenderer : IDisposable
             uniform vec2 uFogRange;
             uniform vec3 uLightTint;
             uniform int uFlatLight;
+            uniform int uShadowHi;
             out vec4 FragColor;
             void main() {
                 vec2 dUV = vUV * 8.0;
                 vec2 aUV = (vUV * 63.0 + 0.5) / 64.0;
+                //Shadow texels are whole cells of the chunk, so the chunk's own 0..1 uv reads the
+                //grid straight: texel k sits at (k+0.5)/64, which is the middle of cell k. The 63
+                //division belongs to the layer alpha maps, whose last row and column are duplicated
+                //on load, not to MCSH shadows.
+                vec2 sUV = vUV;
 
                 if (uDebug == 1) { float a = texture(uAlpha1, aUV).r; FragColor = vec4(a, a, a, 1.0); return; }
                 if (uDebug == 2) { FragColor = vec4(texture(uTex0, dUV).rgb, 1.0); return; }
@@ -605,9 +618,16 @@ public sealed class TerrainRenderer : IDisposable
                 float ndl = max(dot(N, sun), 0.0);
                 float hemi = 0.5 + 0.5 * clamp(N.y, -1.0, 1.0);
                 vec3 ambient = mix(vec3(0.30,0.32,0.38), vec3(0.55,0.55,0.50), hemi);
-                float shadow = (uHasShadow == 1) ? mix(1.0, 0.45, texture(uShadow, aUV).r) : 1.0;
+                float shTex = (uHasShadow == 1) ? texture(uShadow, sUV).r : 0.0;
+                float shadow = mix(1.0, 0.45, shTex);
                 vec3 lit = col * (ambient + vec3(1.0,0.96,0.86) * (ndl * 0.85 * shadow));
                 lit *= uLightTint;
+                //Highlight is a display aid for the shadow sidebar, and nothing else: the Blizzard
+                //dimming above is what the client does and it is hard to read on grass or dark rock,
+                //so on the highlight toggle shadowed ground also takes a dark violet wash that keeps
+                //the terrain texture visible through it. Only texels carrying shadow are touched, and
+                //mixing by the sampled value keeps the edges of a bake as soft as the shadow itself.
+                if (uShadowHi == 1) lit = mix(lit, lit * 0.22 + vec3(0.28, 0.02, 0.44), shTex);
 
                 float dist = length(vWorld - uCamPos);
                 float fog = clamp((dist - uFogRange.x) / (uFogRange.y - uFogRange.x), 0.0, 1.0);

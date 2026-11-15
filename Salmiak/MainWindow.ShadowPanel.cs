@@ -126,6 +126,13 @@ public partial class MainWindow
         _shadowBrushRow = MakeRadio("Brush - paint shadows", true);
         _shadowRayRow = MakeRadio("Raycast - bake chunks", false);
 
+        Section("Shadow view");
+        //Not a bake option: this is a display helper, so it sits with the mode row rather than with
+        //the options that decide what the rays do. The plain Blizzard dimming is often too subtle to
+        //tell where a bake starts and stops, and the violet wash makes it obvious without touching
+        //the shadow data.
+        MakeCheck("Highlight shadows (display only)", 7);
+
         Section("Bake options");
         MakeCheck("Doodad shadows (M2)", 0);
         MakeCheck("Alpha-test foliage", 1);
@@ -227,7 +234,8 @@ public partial class MainWindow
             3 => _viewport.ShadowJitter,
             4 => _viewport.ShadowKeepOld,
             5 => _viewport.ShadowSkipTransparent,
-            _ => _viewport.ShadowTerrainBlocks,
+            6 => _viewport.ShadowTerrainBlocks,
+            _ => _viewport.ShadowHighlight,
         });
     }
 
@@ -243,6 +251,7 @@ public partial class MainWindow
             case 4: _viewport.ShadowKeepOld = v; break;
             case 5: _viewport.ShadowSkipTransparent = v; break;
             case 6: _viewport.ShadowTerrainBlocks = v; break;
+            case 7: _viewport.ShadowHighlight = v; break;
         }
     }
 

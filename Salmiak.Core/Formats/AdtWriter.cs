@@ -346,8 +346,8 @@ public static class AdtWriter
                 if (((m[off + row * 8 + (col >> 3)] >> (col & 7)) & 1) != 0) { dst[row * 64 + col] = 255; any = true; }
             if (any)
             {
-                for (int y = 0; y < 64; y++) dst[y * 64 + 63] = dst[y * 64 + 62];
-                for (int x = 0; x < 64; x++) dst[63 * 64 + x] = dst[62 * 64 + x];
+                //No edge duplication here either: the shadow grid's last row and column are real
+                //cells, so the original bytes have to be compared exactly as the client stores them.
                 orig = dst;
             }
         }

@@ -106,7 +106,7 @@ public sealed partial class GlViewport
         float aspect = Width > 0 && Height > 0 ? (float)Width / Height : 1f;
         if (_doodads != null) { _doodads.Highlight = DoodadMode; _doodads.AnimateDoodads = DoodadAnimation; }
         if (_wmos != null) _wmos.Highlight = WmoMode;
-        if (_terrain != null) _terrain.HighlightLiquids = LiquidMode;
+        if (_terrain != null) { _terrain.HighlightLiquids = LiquidMode; _terrain.HighlightShadows = ShadowHighlight; }
         _sky?.Render(_camera, aspect);
         if (_terrain != null) _terrain.IsolateLayerIndex = (TextureMode && IsolateLayer) ? PaintLayer : -1;
         _terrain?.Render(_camera, aspect);

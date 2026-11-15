@@ -116,6 +116,12 @@ public sealed partial class GlViewport
     public bool ShadowJitter { get; set; }
 
     [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    //Display only: paints rendered shadows dark violet so a bake's outline is readable at a glance,
+    //which the plain Blizzard dimming often is not. Kept out of the bake options because it changes
+    //nothing about what gets ray-traced or exported, and the gamelike look stays the default.
+    public bool ShadowHighlight { get; set; }
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
     public float ShadowJitterValue { get; set; } = 0.005f;
 
     public enum BakeScope { SelectedChunks, EditedTiles, AllTiles }
@@ -247,7 +253,7 @@ public sealed partial class GlViewport
                 chunk.ShadowMap ??= new byte[4096];
                 var map = chunk.ShadowMap;
 
-                float cs = AdtFile.ChunkSize, sx = 63f / cs;
+                float cs = AdtFile.ChunkSize, sx = 64f / cs;
                 int rx0 = 64, ry0 = 64, rx1 = -1, ry1 = -1;
                 int tX0 = Math.Clamp((int)MathF.Floor((hit.X - r + chunk.Position.Y) * sx), 0, 63);
                 int tX1 = Math.Clamp((int)MathF.Ceiling((hit.X + r + chunk.Position.Y) * sx), 0, 63);
@@ -258,8 +264,11 @@ public sealed partial class GlViewport
                 for (int tz = tZ0; tz <= tZ1; tz++)
                 for (int txp = tX0; txp <= tX1; txp++)
                 {
-                    float gx = -(chunk.Position.Y - txp / 63f * cs);
-                    float gz = -(chunk.Position.X - tz / 63f * cs);
+                    //Same grid as the baker: texel (txp, tz) covers ChunkSize/64 of ground and is
+                    //painted at the middle of that cell, which is where the client and the terrain
+                    //shader read it back, so strokes land on the cells the rays would have filled.
+                    float gx = -(chunk.Position.Y - (txp + 0.5f) * cs / 64f);
+                    float gz = -(chunk.Position.X - (tz + 0.5f) * cs / 64f);
                     float dx = gx - hit.X, dz = gz - hit.Z;
                     float d = MathF.Sqrt(dx * dx + dz * dz);
                     if (d >= r) continue;
@@ -490,7 +499,18 @@ public sealed partial class GlViewport
 
         var rec = new Stroke();
         float cs = AdtFile.ChunkSize;
-        float texStep = cs / 63f;
+        //The client's own matrix settles the grid: AllocShadowTexture makes one 64x64 texture per
+        //chunk, and the shadow pass binds it to Tex1, whose transform is the alpha matrix scaled by
+        //0.125 (MapRenderChunk.cpp: alphaScale.x = -s_geoToTex * 0.125, s_geoToTex = -1 / vertexList
+        //[1].y = 1 / 4.1666665f). So texcoord = world offset / ChunkSize: texel k covers the world
+        //CELL from k * ChunkSize/64 up to one cell further east, and the texel is read at the middle
+        //of that cell, not at its west edge. Tracing at the centre is what keeps one chunk's last
+        //cell butting against the next chunk's first one; dividing the chunk by 63 walked the grid
+        //short of its own border, and then the outermost chunk of a TILE traced its last texel
+        //exactly on the tile edge, where the height lookup has no height at all - those texels were
+        //skipped and left a shadowless line one texel wide along tile borders, which a later bake
+        //could not clear either because it never looked at them.
+        float texStep = cs / 64f;
         var opt = new ShadowOpt { AlphaTest = ShadowAlphaTest, AlphaThreshold = alphaThreshold,
                                    SkipTransparent = ShadowSkipTransparent, Terrain = ShadowTerrainBlocks,
                                    Jitter = baseJitter, SubSamples = subSamples, SubThreshold = subThreshold,
@@ -597,14 +617,16 @@ public sealed partial class GlViewport
 
             var cc = new Vector3(-ch.Position.Y + cs / 2f, ch.Position.Z, -ch.Position.X + cs / 2f);
 
-            //Per-chunk broadphase: instance bounds only, then triangles per texel.
+            //No broadphase shortcut here. A chunk with nothing in reach still has to have every one
+            //of its texels rewritten, otherwise a shadow the user brushed into such a chunk - or one
+            //a previous bake left behind when the occluders were in reach then - stays in the map
+            //forever and never gets cleared by the bake that should clear it.
             var localW = new List<ShadowOcc>();
             var localM = new List<ShadowOcc>();
             foreach (var m in wmoOcc)
                 if (BakeNear(cc, m, cs, maxDist, sun)) localW.Add(m);
             foreach (var m in m2Occ)
                 if (BakeNear(cc, m, cs, maxDist, sun)) localM.Add(m);
-            if (localW.Count == 0 && localM.Count == 0) return;
 
             var old = ch.ShadowMap;
             var map = old != null ? (byte[])old.Clone() : new byte[4096];
@@ -621,10 +643,18 @@ public sealed partial class GlViewport
                     int idx = row * 64 + col;
                     if (ShadowKeepOld && old != null && old[idx] != 0) continue;
 
-                    float gx = -ch.Position.Y + col * texStep;
-                    float gz = -ch.Position.X + row * texStep;
+                    //Middle of the texel's cell, the point the client samples it at (see texStep).
+                    float gx = -ch.Position.Y + (col + 0.5f) * texStep;
+                    float gz = -ch.Position.X + (row + 0.5f) * texStep;
                     float gy = HeightAtGL(gx, gz);
-                    if (float.IsNaN(gy)) continue;
+                    if (float.IsNaN(gy))
+                    {
+                        //No ground to trace from, which leaves tiles that are not streamed. Clearing
+                        //keeps a bake total: every texel of every selected chunk gets a verdict, so
+                        //stale shadow cannot hide behind a skipped texel.
+                        if (map[idx] != 0) map[idx] = 0;
+                        continue;
+                    }
 
                     //Water is deliberately not consulted here. The lake bed is lit like any other
                     //ground in the client's own MCSH payloads, so a submerged texel keeps the shadow
@@ -647,8 +677,8 @@ public sealed partial class GlViewport
                             for (int sy = 0; sy < subSamples; sy++)
                             for (int sx = 0; sx < subSamples; sx++)
                             {
-                                float px = gx + (sx + 0.5f) * cell;
-                                float pz = gz + (sy + 0.5f) * cell;
+                                float px = gx + (sx + 0.5f - subSamples * 0.5f) * cell;
+                                float pz = gz + (sy + 0.5f - subSamples * 0.5f) * cell;
                                 float py = HeightAtGL(px, pz);
                                 if (float.IsNaN(py)) continue;
                                 var sub = new Vector3(px, py + 0.3f, pz);

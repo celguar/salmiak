@@ -133,7 +133,10 @@ public sealed class AdtFile
             if (((src[byteIdx] >> (col & 7)) & 1) != 0) { dst[row * 64 + col] = 255; any = true; }
         }
         if (!any) return null;
-        FixAlphaEdges(dst);
+        //No edge fix here, unlike the layer alpha maps above: MCSH is a plain 64x64 grid of cells,
+        //so its last row and column are real shadow the neighbouring chunk does not already have.
+        //WoW Viewer's own MCSH reader leaves them alone, and duplicating them wipes a shadow ring
+        //one texel wide along the east and south border of every chunk.
         return dst;
     }
 
@@ -535,8 +538,11 @@ public sealed class MapChunk
 
     public LiquidLayer? Liquid { get; set; }
 
-    // Shadow maps are 64x64 samples, one byte per texel (0 or 255). Texel (row, col)
-    // covers world position x = -Position.X + row * ChunkSize/63, z = -Position.Y + col * ChunkSize/63.
+    // Shadow maps are 64x64 CELLS, one byte per texel (0 or 255), and each cell covers ChunkSize/64
+    // of ground: texel (row, col) spans z = -Position.X + row*ChunkSize/64 up to one cell further
+    //south and x = -Position.Y + col*ChunkSize/64 up to one cell further east. The client samples
+    //this grid with the alpha-map matrix whose scale is 1/ChunkSize, so the value is read at the
+    //middle of the cell, and that is the point the rays are traced from.
     public const int TexelsPerSide = 64;
     public const int ShadowTexels  = TexelsPerSide * TexelsPerSide;
 
