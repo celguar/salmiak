@@ -19,9 +19,10 @@ public sealed partial class GlViewport
 
     public event Action? NpcModeEntered;
 
-    // Which classic sequence the shown creatures play (-1 = each model's first sequence that has
-    // a length). Only the GPU pose is affected: the shadow baker reads the CPU geometry, which
-    // always stays in the bind pose.
+    // Which classic sequence the shown creatures play (-1 = the one the client stands them on,
+    // animation 0 resolved through the model's own animation-id lookup, which is the Stand
+    // sequence). Only the drawn pose is affected: the shadow baker traces CPU geometry that was
+    // posed once into its rest pose and never changes while a model plays.
     public int NpcSequence { get; set; } = -1;
 
     public bool NpcAnimation { get; set; } = true;

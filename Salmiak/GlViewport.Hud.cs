@@ -274,8 +274,8 @@ public sealed partial class GlViewport
                    "click a liquid to select its whole body   Ctrl+N / middle-click pick a liquid to place   Ctrl+U exit";
         }
         if (NpcMode)
-            return $"NPC view - {_npcCount} creature spawn(s) from the world database - rigged models play "
-                   + (NpcAnimation ? (NpcSequence >= 0 ? $"sequence {NpcSequence}" : "their first animated sequence") : "no animation (bind pose)")
+            return $"NPC view - {_npcCount} creature spawn(s) from the world database - rigged models "
+                   + (NpcAnimation ? (NpcSequence >= 0 ? $"play sequence {NpcSequence}" : "play the idle (Stand) sequence") : "hold the rest pose")
                    + $"\n" +
                    "click an NPC = select + show its patrol   ·   click a waypoint = details   ·   Esc = step out / exit   ·   RMB look   WASD move";
         if (HerbMode)

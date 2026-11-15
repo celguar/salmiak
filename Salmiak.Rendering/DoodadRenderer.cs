@@ -31,14 +31,14 @@ public sealed class DoodadRenderer : IDisposable
 
     // GPU skinning for classic (v.256) rigged models. The static path keeps its own vertex array:
     // the bone slot and weight attributes are disabled there, which feeds them GL's generic value
-    // (0,0,0,1) rather than zeros, so the only way a static model stays in the bind pose the
-    // shadow baker ray-traced is that the bone count uniform reads 0 while it is drawn, which
+    // (0,0,0,1) rather than zeros, so the only way a model that is not rigged at all stays where
+    // the shadow baker traced it is that the bone count uniform reads 0 while it is drawn, which
     // makes the shader's BoneMatrix return the identity and the blend collapse to it.
     // 192 slots is what the shader's uBones array holds, and it is enough for the whole 1.12
     // client: measured over the 7480 classic models of model.MPQ whose vertices name bones at all,
     // once the vertex bytes are bound to the bones they name, the busiest skeleton is
     // transportship_sails.m2 with 176 slots and only five models pass 128 at all, so every model
-    // of the 1.12 client fits and one over the cap keeps the bind pose it was baked in.
+    // of the 1.12 client fits and one over the cap is drawn unposed instead.
     private const int MaxBones = 192;
     private int _uBones, _uBoneCount;
     // One matrix at a time, in OpenTK's own matrix type: the model and view matrices already
@@ -95,13 +95,16 @@ public sealed class DoodadRenderer : IDisposable
         public float Radius;
         public bool Failed;
 
-        // Skinning and texture animation for the drawn models only, so the shadow baker (which
-        // reads Vertices/Indices and nothing else) always sees the bind pose and baked shadows
-        // stay identical however the model is animated.
+        // The skinning attributes and the pose belong to the drawn models only, while the shadow
+        // baker reads Vertices and Indices and nothing else, so what it traces never changes while a
+        // model plays: for the bake, BuildCpuModel writes the rest pose, the first frame of the
+        // sequence the model stands on, straight into Vertices once, which is the pose the client had
+        // when it baked the shadows this bake is meant to reproduce.
         public float[] SkinAttrib = [];
         public M2Pose? Pose;
         public M2UvAnimation? UvSampler;
         public int[] UvAnims = [];      // one per Submeshes entry, -1 when the unit is not animated
+        // The sequence a model plays when none was asked for and the one its rest pose comes from.
         public int DefaultSequence = -1;
     }
 
@@ -114,7 +117,7 @@ public sealed class DoodadRenderer : IDisposable
         var key = Path.ChangeExtension(m2Path, ".m2");
         if (_cpuModels.TryGetValue(key, out var cached)) return cached;
         CpuModel? built = null;
-        // The baker only needs the bind-pose geometry, so this build skips the animation data.
+        // The baker only needs geometry, so this build skips the skinning attributes and the pose.
         try { built = BuildCpuModel(key, null, false); }
         catch (Exception) { built = null; }
         _cpuModels[key] = built;
@@ -226,11 +229,12 @@ public sealed class DoodadRenderer : IDisposable
 
     public int SelectedNpc { get; set; } = -1;
 
-    // Classic skeletal playback for the NPC models. Shadow baking is untouched because the baker
-    // reads CpuModel.Vertices, which always stay in the bind pose.
+    // Classic skeletal playback for the NPC models. Shadow baking never sees these poses: it traces
+    // the CPU geometry of the map's doodad models, which is posed once to its rest pose.
     public bool AnimateNpcs { get; set; } = true;
 
-    // -1 plays each model's first sequence that has a length.
+    // -1 plays the sequence each model stands on, which is animation 0 (Stand) resolved through the
+    // model's own animation-id lookup.
     public int NpcSequence { get; set; } = -1;
 
     public float AnimationTimeScale { get; set; } = 1f;
@@ -241,8 +245,9 @@ public sealed class DoodadRenderer : IDisposable
     // keys at all, which is why most bushes, shrubs and grass simply stay put.
     public bool AnimateDoodads { get; set; } = true;
 
-    // -1 plays each model's own first sequence with a length; one doodad type playing a
-    // sequence another does not have is simply drawn in its bind pose.
+    // -1 plays the sequence each model stands on (animation 0, Stand, through its own lookup). A
+    // doodad type asked for a sequence number another of the same kind does not have simply holds
+    // the first frame of its own tracks.
     public int DoodadSequence { get; set; } = -1;
 
     private readonly System.Diagnostics.Stopwatch _clock = System.Diagnostics.Stopwatch.StartNew();
@@ -359,9 +364,10 @@ public sealed class DoodadRenderer : IDisposable
         catch (Exception) { }
     }
 
-    // The render flag separates the two uses of a model: the shadow baker asks for geometry only
-    // (bind pose, no animation data), while anything that will be drawn also gets the pose and
-    // the texture animation, which live in their own attributes and never touch Vertices.
+    // The render flag separates the two uses of a model: the shadow baker asks for geometry only,
+    // which it gets posed once into its rest pose so the triangles it traces match the ones the
+    // client had, while anything that will be drawn also gets the pose and the texture animation,
+    // which live in their own attributes and never touch Vertices.
     private CpuModel BuildCpuModel(string m2Path, NpcLook? look, bool render)
     {
         var cm = new CpuModel { Path = m2Path, Look = look, Key = CacheKey(m2Path, look) };
@@ -400,12 +406,13 @@ public sealed class DoodadRenderer : IDisposable
             }
             cm.Submeshes = subs.ToArray();
             cm.UvAnims = uvAnims.ToArray();
-            cm.DefaultSequence = FirstAnimatedSequence(m2);
+            cm.DefaultSequence = IdleSequence(m2);
             if (render)
             {
                 AddSkinning(cm, m2);
                 AddTextureAnimation(cm, m2);
             }
+            else RestPoseForBake(cm, m2);
         }
         catch { cm.Failed = true; }
         return cm;
@@ -461,6 +468,81 @@ public sealed class DoodadRenderer : IDisposable
 
         cm.SkinAttrib = attrib;
         cm.Pose = pose;
+    }
+
+    // The shadow baker traces a model's own triangles to decide what blocks the sun, and the shadows
+    // it has to agree with are the ones Blizzard wrote into the client's MCSH payloads, which were
+    // traced against the geometry the client draws: the model holds the first frame of the sequence
+    // it arms, which is animation 0 (Stand), rather than the bind pose. The two differ a lot on the
+    // rigged doodads. A gryphon or wyvern roost is a bind pose with the wings held straight out to
+    // the sides, a T pose, while the wyphlets in the client's nests sit with their wings folded, and
+    // the baked shadows under the Westfall and Durotar nests hold no wings at all, so baking the bind
+    // pose lays a wing shadow on the nest floor that the client never had. CPU-skinning the vertices
+    // into the idle sequence's first frame is what makes the traced triangles the client's own.
+    private static void RestPoseForBake(CpuModel cm, M2File m2)
+    {
+        if (!HasAnimKeys(m2)) return;
+        var pose = new M2Pose(m2);
+        if (!pose.Animates()) return;
+        pose.Evaluate(cm.DefaultSequence, 0);
+        var mats = pose.Matrices();
+        var weights = m2.BoneWeights;
+        var verts = cm.Vertices;
+        int vertices = verts.Length / 8;
+        for (int v = 0; v < vertices; v++)
+        {
+            int inf = v * 4;
+            var o = v * 8;
+            var px = (float)verts[o];
+            var py = (float)verts[o + 1];
+            var pz = (float)verts[o + 2];
+            var nx = (float)verts[o + 3];
+            var ny = (float)verts[o + 4];
+            var nz = (float)verts[o + 5];
+            var qx = 0f;
+            var qy = 0f;
+            var qz = 0f;
+            var dx = 0f;
+            var dy = 0f;
+            var dz = 0f;
+            var posed = false;
+            for (int k = 0; k < 4; k++)
+            {
+                if (inf + k >= weights.Length || weights[inf + k] <= 0f) continue;
+                var bone = pose.ResolvedBone(inf + k);
+                if (bone < 0 || bone >= mats.Length) continue;
+                var w = weights[inf + k];
+                var m = mats[bone];
+                // The same blend the shader does, in System.Numerics' row-vector convention: the
+                // position is the point times the bone matrix, weighted, summed over the influences.
+                qx += w * (px * m.M11 + py * m.M21 + pz * m.M31 + m.M41);
+                qy += w * (px * m.M12 + py * m.M22 + pz * m.M32 + m.M42);
+                qz += w * (px * m.M13 + py * m.M23 + pz * m.M33 + m.M43);
+                dx += w * (nx * m.M11 + ny * m.M21 + nz * m.M31);
+                dy += w * (nx * m.M12 + ny * m.M22 + nz * m.M32);
+                dz += w * (nx * m.M13 + ny * m.M23 + nz * m.M33);
+                posed = true;
+            }
+            if (!posed) continue;
+            verts[o] = qx; verts[o + 1] = qy; verts[o + 2] = qz;
+            verts[o + 3] = dx; verts[o + 4] = dy; verts[o + 5] = dz;
+        }
+
+        // The box the baker keeps for the model, grown to hold the rest pose as well as the bind
+        // pose it was measured from, so the sphere every instance of the model is culled by still
+        // covers the triangles that are actually traced.
+        var min = cm.Min;
+        var max = cm.Max;
+        for (int v = 0; v < vertices; v++)
+        {
+            var o = v * 8;
+            min = new Vector3(Math.Min(min.X, verts[o]), Math.Min(min.Y, verts[o + 1]), Math.Min(min.Z, verts[o + 2]));
+            max = new Vector3(Math.Max(max.X, verts[o]), Math.Max(max.Y, verts[o + 1]), Math.Max(max.Z, verts[o + 2]));
+        }
+        cm.Min = min;
+        cm.Max = max;
+        cm.Center = (min + max) * 0.5f;
+        cm.Radius = (max - min).Length * 0.5f;
     }
 
     // The uv transform of the submeshes that carry one. Only the units whose texture unit points
@@ -550,14 +632,25 @@ public sealed class DoodadRenderer : IDisposable
         GL.BindVertexArray(0);
     }
 
-    // The sequence a model plays when none was asked for: the first one that has a length.
-    private static int FirstAnimatedSequence(M2File m2)
+    // The sequence a model plays when none was asked for: the one the client arms, which is
+    // animation 0 (Stand) through the header's animation-id lookup, then the sequence record whose
+    // own animation id is 0, and only as a last resort the first sequence that has a length. Benilla's
+    // hosts.md says the default is "animation 0 when the model has the animation that id 0 resolves to,
+    // else the first dword of the first sequence record", and its doodad host plays "Stand with a drawn
+    // variation". Choosing by the lookup rather than by the order the records were written is what the
+    // data forces: the 1.12 client's Raptor.m2 puts Run (id 5) first, Walk (id 4) second and Stand (id
+    // 0) third with lookup entry 0 at sequence 2, and NagaMale puts Walk first with entry 0 at sequence
+    // 2, so taking the first sequence that has a length makes those creatures run or walk in place
+    // while the client has them stand. The race models people wear already have Stand as their first
+    // sequence, which is why only the creature models looked wrong.
+    private static int IdleSequence(M2File m2)
     {
+        var lookup = m2.SequenceLookup;
+        if (lookup.Length > 0 && lookup[0] < m2.Sequences.Count) return lookup[0];
         for (int q = 0; q < m2.Sequences.Count; q++)
-        {
-            var s = m2.Sequences[q];
-            if ((long)s.TimeEnd - (long)s.TimeStart > 0) return q;
-        }
+            if (m2.Sequences[q].AnimId == 0u) return q;
+        for (int q = 0; q < m2.Sequences.Count; q++)
+            if ((long)m2.Sequences[q].TimeEnd - (long)m2.Sequences[q].TimeStart > 0) return q;
         return 0;
     }
 
@@ -784,21 +877,27 @@ public sealed class DoodadRenderer : IDisposable
                             int bonesLocation, int boneCountLocation, bool idPass)
     {
         var skinned = false;
-        if (animate && g.Pose != null && g.SkinVao != 0 && g.BoneSlots > 0)
+        if (g.Pose != null && g.SkinVao != 0 && g.BoneSlots > 0)
         {
+            // A model whose animation is switched off does not fall back to the bind pose: it holds
+            // the first frame of the sequence it plays, because that is the pose the client draws it
+            // in and the pose the shadows under it were baked from, which is the rest pose the baker
+            // traces. A gryphon roost drawn in its bind pose would hold the wyphlets' wings out
+            // straight to the sides over a floor the client's own shadows show clean.
+            var time = animate ? elapsedMs : 0;
+            var seq = animate && requestedSequence >= 0 ? requestedSequence : g.DefaultSequence;
             // The bone uniforms are one array per program, so they only hold for as long as the
             // model that was posed last is the one being drawn: instances of one model are not
             // necessarily next to each other, so another rigged model in between has to have its
             // own bones uploaded again, or this model's slots would read the previous model's
             // matrices and deform it by a skeleton it does not own.
             if ((idPass ? _posedId : _posedMain) != g
-                || (idPass ? _posedElapsedId : _posedElapsedMain) != elapsedMs)
+                || (idPass ? _posedElapsedId : _posedElapsedMain) != time)
             {
-                var seq = requestedSequence >= 0 ? requestedSequence : g.DefaultSequence;
-                g.Pose.Evaluate(seq, elapsedMs);
+                g.Pose.Evaluate(seq, time);
                 UploadBones(g.Pose, bonesLocation, boneCountLocation, idPass);
-                if (idPass) { _posedId = g; _posedElapsedId = elapsedMs; }
-                else { _posedMain = g; _posedElapsedMain = elapsedMs; }
+                if (idPass) { _posedId = g; _posedElapsedId = time; }
+                else { _posedMain = g; _posedElapsedMain = time; }
             }
             skinned = true;
         }
@@ -1034,8 +1133,9 @@ public sealed class DoodadRenderer : IDisposable
         GL.Uniform1(_uAlpha, 1f);
         GL.Uniform1(_uHighlight, 0);
 
-        // Thumbnails are drawn in the bind pose with unscrolled texture coordinates, so a texture
-        // transform an earlier scene pass left behind has to be cleared here as well.
+        // Thumbnails hold whatever pose the model's own vertices carry, with unscrolled texture
+        // coordinates, so a texture transform an earlier scene pass left behind has to be cleared
+        // here as well.
         UploadUv(System.Numerics.Matrix4x4.Identity, _uUvXform);
         _uvDirty = false;
         SetBoneCount(_uBoneCount, 0, false);
@@ -1196,7 +1296,7 @@ public sealed class DoodadRenderer : IDisposable
 
             void main() {
                 // Static geometry (doodads, unrigged models) has no weights at all, which leaves
-                // it in the bind pose the shadow baker ray-traced. Blending the bone matrices is
+                // it where the CPU already posed it for the shadow baker. Blending the bone matrices is
                 // the same result as blending deformed positions when the weights sum to one.
                 float total = aBoneWeights.x + aBoneWeights.y + aBoneWeights.z + aBoneWeights.w;
                 mat4 skin = mat4(1.0);

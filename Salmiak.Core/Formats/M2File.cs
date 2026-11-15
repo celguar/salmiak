@@ -24,6 +24,20 @@ public sealed class M2File
     // posing happens at render time (wow-viewer's lazy design), so nothing is pre-decoded here.
     public List<M2Sequence> Sequences { get; } = new();
 
+    // The header's animation-id lookup: the entry at an animation id names the sequence record this
+    // model plays for it. Benilla's fields.tsv calls the header pair at +0x24/+0x28 m_nSequenceLookup
+    // and m_sequenceLookup, shared.md's header-fixup table gives 2-byte entries for that pair, and
+    // animation.md's ResolveAnimationId reads entry 0 (animation 0, which the client's own name table
+    // at 0x8686a8 calls Stand) and entry 0x93 while playback.md checks the value it gets against the
+    // sequence count, so the entry is a sequence index and 0xffff means unmapped. Measured over the
+    // 1.12 client's NPC models: Raptor.m2 maps entry 0 to sequence 2, whose own record carries
+    // animation id 0, while its sequence 0 is id 5 (Run) and its sequence 1 is id 4 (Walk); NagaMale
+    // maps 0 to sequence 2 as well behind a Walk first; TrollMale maps 0 to sequence 108. So the
+    // sequence a creature stands on is rarely the first one, which is why playing "the first sequence
+    // that has a length" has those creatures run or walk in place instead of standing as the client
+    // does, while the human race models, whose sequence 0 is already Stand, look right either way.
+    public ushort[] SequenceLookup { get; private set; } = [];
+
     public List<M2Bone> Bones { get; } = new();
 
     public ushort[] KeyBoneLookup { get; private set; } = [];
@@ -78,6 +92,7 @@ public sealed class M2File
         // Classic animation header (Salmiak only ever reads v.256/257 M2s, so the
         // classic field order and record sizes apply unchanged).
         uint nSequences = U(7), ofsSequences = U(8);
+        uint nSeqLookup = U(9),  ofsSeqLookup = U(10);
         uint nBones     = U(13), ofsBones    = U(14);
         uint nKeyBones  = U(15), ofsKeyBones = U(16);
         uint nBoneLut   = U(35), ofsBoneLut  = U(36);
@@ -93,6 +108,15 @@ public sealed class M2File
             stream.Position = ofsGlobalSeq;
             for (int i = 0; i < nGlobalSeq; i++) global[i] = r.ReadUInt32();
             m2.GlobalSequences = global;
+        }
+
+        // One 2-byte entry per animation id, holding the sequence record to play for it.
+        if (ofsSeqLookup > 0 && ofsSeqLookup + (long)nSeqLookup * 2 <= stream.Length)
+        {
+            var seqLookup = new ushort[nSeqLookup];
+            stream.Position = ofsSeqLookup;
+            for (int i = 0; i < nSeqLookup; i++) seqLookup[i] = r.ReadUInt16();
+            m2.SequenceLookup = seqLookup;
         }
 
         var texLookup = new ushort[nTexLookup];
