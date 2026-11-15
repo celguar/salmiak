@@ -49,6 +49,17 @@ public sealed partial class GlViewport
     public int RecenterMargin { get; set; } = 2;
 
     public event Action<int>? TileCountChanged;
+    private int _tileCount;
+
+    //Streaming runs every frame and usually arrives at the same tile count, so the event is only
+    //fired when the count actually changed: the status bar and the message log never need to see
+    //the same number over and over.
+    private void SetTileCount(int n)
+    {
+        if (_tileCount == n) return;
+        _tileCount = n;
+        TileCountChanged?.Invoke(n);
+    }
 
     public event Action<bool>? LoadingChanged;
     private volatile bool _loading;
@@ -154,7 +165,7 @@ public sealed partial class GlViewport
             _objectsDirty = false;
         }
 
-        TileCountChanged?.Invoke(order.Count);
+        SetTileCount(order.Count);
     }
 
     private void StartWorker()

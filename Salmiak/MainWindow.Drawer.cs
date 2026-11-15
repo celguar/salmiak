@@ -215,7 +215,7 @@ public partial class MainWindow
 
     private void ExportDoodadObj(string modelPath)
     {
-        if (_mpq == null) { StatusText.Text = "Export OBJ: open a WoW directory first."; return; }
+        if (_mpq == null) { Say("Export OBJ: open a WoW directory first."); return; }
         string m2Path = System.IO.Path.ChangeExtension(modelPath, ".m2");
         M2File? m2;
         try { using var s = _mpq.OpenFile(m2Path); m2 = M2File.Parse(s); }
@@ -243,7 +243,7 @@ public partial class MainWindow
                 msg += $"\n\n{warnings.Count} texture warning(s):\n" + string.Join("\n", warnings.Take(8)) +
                        (warnings.Count > 8 ? "\n..." : "");
             System.Windows.MessageBox.Show(this, msg, "Export OBJ complete", MessageBoxButton.OK, MessageBoxImage.Information);
-            StatusText.Text = $"Exported {System.IO.Path.GetFileName(dlg.FileName)}";
+            Say($"Exported {System.IO.Path.GetFileName(dlg.FileName)}");
         }
         catch (Exception ex)
         {

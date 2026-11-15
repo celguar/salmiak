@@ -17,7 +17,7 @@ public partial class MainWindow
 
     private void BakeShadows_Click(object sender, RoutedEventArgs e)
     {
-        if (_viewport == null || _viewport.MapName == null) { StatusText.Text = "Bake shadows: open a terrain map first."; return; }
+        if (_viewport == null || _viewport.MapName == null) { Say("Bake shadows: open a terrain map first."); return; }
 
         var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
         System.Windows.Controls.Slider MakeSlider(string label, double min, double max, double val, string unit)
@@ -104,16 +104,16 @@ public partial class MainWindow
             _ => GlViewport.BakeScope.EditedTiles,
         };
 
-        StatusText.Text = "Baking shadows...";
+        Say("Baking shadows...");
         int n = _viewport.BakeShadows(chosen);
         //Keep the chunk selection when it was the scope so the sun can be retuned and the same
         //chunks baked again; otherwise drop it so a stale selection cannot affect later bakes.
         if (chosen != GlViewport.BakeScope.SelectedChunks)
             _viewport.ClearBakeChunks();
-        StatusText.Text = n > 0 ? $"Ray-baked {n} chunk(s) - Ctrl+Z to undo and retune."
+        Say(n > 0 ? $"Ray-baked {n} chunk(s) - Ctrl+Z to undo and retune."
             : chosen == GlViewport.BakeScope.SelectedChunks && selCount == 0
             ? "No chunks selected: enter bake-chunk mode (Ctrl+I), click the chunks, then bake."
-            : "Bake shadows: nothing changed in scope.";
+            : "Bake shadows: nothing changed in scope.");
         //If the Shadows sidebar is open, repaint it from the values this dialog just used so the
         //two never disagree about what the next bake will do.
         if (_viewport.CurrentTool == GlViewport.Tool.Shadow) RefreshShadowOptions();
@@ -144,7 +144,7 @@ public partial class MainWindow
             Properties.Settings.Default.Save();
 
             _viewport?.SetMpq(_mpq);
-            StatusText.Text = $"Opened {_mpq.DiagnosticLog.Split('\n').Count(l => l.StartsWith("OK"))} archives";
+            Say($"Opened {_mpq.DiagnosticLog.Split('\n').Count(l => l.StartsWith("OK"))} archives");
             PopulateMapList();
 
             if (cur != null)
@@ -160,18 +160,18 @@ public partial class MainWindow
                     if (pose != null && _viewport != null) _viewport.CameraPose = pose.Value;
                 }
                 else
-                    StatusText.Text += $" - map '{cur}' not found in the new archive set.";
+                    SayMore($" - map '{cur}' not found in the new archive set.");
             }
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Error: {ex.Message}";
+            Say($"Error: {ex.Message}");
         }
     }
 
     private void MpqArchives_Click(object sender, RoutedEventArgs e)
     {
-        if (_mpq == null) { StatusText.Text = "Set your WoW directory first (File → Set WoW Directory)."; return; }
+        if (_mpq == null) { Say("Set your WoW directory first (File → Set WoW Directory)."); return; }
 
         var panel = new System.Windows.Controls.StackPanel { Margin = new Thickness(10) };
         panel.Children.Add(new System.Windows.Controls.TextBlock
@@ -236,7 +236,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Error: {ex.Message}"; return;
+            Say($"Error: {ex.Message}"); return;
         }
 
         MapList.Items.Clear();
@@ -253,7 +253,7 @@ public partial class MainWindow
             LoadMap(match.Name);
         }
         else
-            StatusText.Text = $"{active} archive(s) active" + (cur != null ? $" - map '{cur}' is no longer available." : ".");
+            Say($"{active} archive(s) active" + (cur != null ? $" - map '{cur}' is no longer available." : "."));
     }
 
     private void OpenMap_Click(object sender, RoutedEventArgs e)
@@ -267,7 +267,7 @@ public partial class MainWindow
     private void NewMap_Click(object sender, RoutedEventArgs e)
     {
         if (_viewport == null) return;
-        if (_mpq == null) { StatusText.Text = "New map: set your WoW directory first (File → Set WoW Directory)."; return; }
+        if (_mpq == null) { Say("New map: set your WoW directory first (File → Set WoW Directory)."); return; }
         if (_viewport.EditedTileCount > 0 &&
             System.Windows.MessageBox.Show(this, "Creating a new map discards the current unsaved edits. Continue?",
                 "New map", MessageBoxButton.YesNo, MessageBoxImage.Warning) != MessageBoxResult.Yes)
@@ -325,11 +325,11 @@ public partial class MainWindow
         try { if (win.ShowDialog() != true) return; } finally { _viewport.ModalOpen = false; }
 
         string name = nameBox.Text.Trim();
-        if (string.IsNullOrEmpty(name)) { StatusText.Text = "New map: enter a name."; return; }
+        if (string.IsNullOrEmpty(name)) { Say("New map: enter a name."); return; }
         if (!int.TryParse(wBox.Text.Trim(), out int w) || !int.TryParse(hBox.Text.Trim(), out int h) || w < 1 || h < 1)
-        { StatusText.Text = "New map: width/height must be positive integers."; return; }
-        if (w > 64 || h > 64) { StatusText.Text = "New map: max 64 tiles per side."; return; }
-        if (w * h > 1024) { StatusText.Text = $"New map: {w}×{h} = {w * h} tiles is too large (max 1024)."; return; }
+        { Say("New map: width/height must be positive integers."); return; }
+        if (w > 64 || h > 64) { Say("New map: max 64 tiles per side."); return; }
+        if (w * h > 1024) { Say($"New map: {w}×{h} = {w * h} tiles is too large (max 1024)."); return; }
         if (!float.TryParse(zBox.Text.Trim(), out float z)) z = 0f;
         string tex = (texCombo.IsEditable ? texCombo.Text : texCombo.SelectedItem as string) ?? defaultTex;
         if (string.IsNullOrWhiteSpace(tex)) tex = defaultTex;
@@ -343,7 +343,7 @@ public partial class MainWindow
             _suppressMapSelect = true;
             MapList.SelectedItem = entry;
             _suppressMapSelect = false;
-            StatusText.Text = $"Created '{name}' ({w}×{h} tiles). Sculpt/paint/place, then Project → Save Edits.";
+            Say($"Created '{name}' ({w}×{h} tiles). Sculpt/paint/place, then Project → Save Edits.");
         }
     }
 
@@ -363,13 +363,13 @@ public partial class MainWindow
 
     private void ZoneLighting_Click(object sender, RoutedEventArgs e)
     {
-        if (_mpq == null) { StatusText.Text = "Set your WoW directory first."; return; }
+        if (_mpq == null) { Say("Set your WoW directory first."); return; }
         int continent = ContinentId(_viewport?.MapName);
-        if (continent < 0) { StatusText.Text = "Zone lighting: load Azeroth or Kalimdor first."; return; }
+        if (continent < 0) { Say("Zone lighting: load Azeroth or Kalimdor first."); return; }
 
         Salmiak.Core.Formats.ZoneLighting zl;
         try { zl = Salmiak.Core.Formats.ZoneLighting.Load(p => _mpq.OpenFile(p)); }
-        catch (Exception ex) { StatusText.Text = $"Zone lighting: {ex.Message}"; return; }
+        catch (Exception ex) { Say($"Zone lighting: {ex.Message}"); return; }
 
         var zones = zl.ListZones(continent);
         zones.Sort((a, b) => a.IsGlobal != b.IsGlobal ? (a.IsGlobal ? -1 : 1)
@@ -437,7 +437,7 @@ public partial class MainWindow
         int n = 0;
         foreach (var cb in checks)
             if (cb.IsChecked == true && cb.Tag is int idx) { zl.MakeNight(idx, darkness); n++; }
-        if (n == 0) { StatusText.Text = "Zone lighting: no zones selected."; return; }
+        if (n == 0) { Say("Zone lighting: no zones selected."); return; }
 
         var patch = zl.BuildPatchFiles();
         var dlg = new Microsoft.Win32.SaveFileDialog
@@ -449,9 +449,9 @@ public partial class MainWindow
         try
         {
             Salmiak.Core.IO.MpqArchiveWriter.Write(dlg.FileName, patch);
-            StatusText.Text = $"Night patch written ({n} zone(s)): {dlg.FileName} - drop into your WoW Data folder.";
+            Say($"Night patch written ({n} zone(s)): {dlg.FileName} - drop into your WoW Data folder.");
         }
-        catch (Exception ex) { StatusText.Text = $"Export failed: {ex.Message}"; }
+        catch (Exception ex) { Say($"Export failed: {ex.Message}"); }
     }
 
     private const string ProjectFilter = "WoW Map Editor project (*.wmproj)|*.wmproj|All files (*.*)|*.*";
@@ -462,7 +462,7 @@ public partial class MainWindow
         if (_viewport.EditedTileCount == 0 && !_viewport.HasExportableEdits &&
             _viewport.FlightEditCount == 0 && _viewport.NewZoneCount == 0)
         {
-            StatusText.Text = "No edits to save.";
+            Say("No edits to save.");
             return;
         }
         var dlg = new Microsoft.Win32.SaveFileDialog
@@ -475,8 +475,8 @@ public partial class MainWindow
         try
         {
             _viewport.SaveEdits(dlg.FileName);
-            StatusText.Text = $"Saved {_viewport.EditedTileCount} tile(s), {_viewport.FlightEditCount} route(s), " +
-                              $"{_viewport.NewZoneCount} zone(s) -> {System.IO.Path.GetFileName(dlg.FileName)}";
+            Say($"Saved {_viewport.EditedTileCount} tile(s), {_viewport.FlightEditCount} route(s), " +
+                              $"{_viewport.NewZoneCount} zone(s) -> {System.IO.Path.GetFileName(dlg.FileName)}");
         }
         catch (Exception ex)
         {
@@ -501,7 +501,7 @@ public partial class MainWindow
                     "Open that map to see them in place.",
                     "Map mismatch", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            StatusText.Text = $"Loaded {_viewport.EditedTileCount} edited tile(s) from {System.IO.Path.GetFileName(dlg.FileName)}";
+            Say($"Loaded {_viewport.EditedTileCount} edited tile(s) from {System.IO.Path.GetFileName(dlg.FileName)}");
         }
         catch (Exception ex)
         {
@@ -517,11 +517,11 @@ public partial class MainWindow
         try
         {
             int n = _viewport.ExportServerMaps(dlg.FolderName);
-            StatusText.Text = $"Wrote {n} server .map file(s) → {dlg.FolderName} - restart mangosd to pick them up.";
+            Say($"Wrote {n} server .map file(s) → {dlg.FolderName} - restart mangosd to pick them up.");
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Server map export failed: {ex.Message}";
+            Say($"Server map export failed: {ex.Message}");
         }
     }
 
@@ -530,7 +530,7 @@ public partial class MainWindow
         if (_viewport == null) return;
         if (!_viewport.HasExportableEdits)
         {
-            StatusText.Text = "No edits to export.";
+            Say("No edits to export.");
             return;
         }
         var dlg = new Microsoft.Win32.SaveFileDialog
@@ -545,7 +545,7 @@ public partial class MainWindow
         try
         {
             int n = _viewport.ExportMpq(dlg.FileName);
-            StatusText.Text = $"Exported {n} file(s) -> {System.IO.Path.GetFileName(dlg.FileName)}  (drop into WoW\\Data)";
+            Say($"Exported {n} file(s) -> {System.IO.Path.GetFileName(dlg.FileName)}  (drop into WoW\\Data)");
         }
         catch (Exception ex)
         {
@@ -559,7 +559,7 @@ public partial class MainWindow
         int edits = _viewport.FlightEditCount;
         if (edits == 0)
         {
-            StatusText.Text = "Flight paths: no edits to export (enter flight mode, edit a path, then export).";
+            Say("Flight paths: no edits to export (enter flight mode, edit a path, then export).");
             return;
         }
         var dlg = new Microsoft.Win32.OpenFolderDialog
@@ -570,7 +570,7 @@ public partial class MainWindow
         try
         {
             int n = _viewport.ExportFlightPaths(dlg.FolderName);
-            StatusText.Text = $"Exported {n} edited/new path(s) to {dlg.FolderName} - see README.txt for where each file goes.";
+            Say($"Exported {n} edited/new path(s) to {dlg.FolderName} - see README.txt for where each file goes.");
         }
         catch (Exception ex)
         {
@@ -637,7 +637,7 @@ public partial class MainWindow
                 string msg = $"Merged {sources.Count} archives → {count} file(s) into {System.IO.Path.GetFileName(save.FileName)}.";
                 if (conflicts.Count > 0) msg += $"\n\n{conflicts.Count} conflicting file(s) (later source kept):\n" + string.Join("\n", conflicts.Take(15)) + (conflicts.Count > 15 ? "\n..." : "");
                 System.Windows.MessageBox.Show(win, msg, "Merge complete", MessageBoxButton.OK, MessageBoxImage.Information);
-                StatusText.Text = $"Merged {count} file(s) -> {System.IO.Path.GetFileName(save.FileName)}";
+                Say($"Merged {count} file(s) -> {System.IO.Path.GetFileName(save.FileName)}");
                 win.Close();
             }
             catch (Exception ex)

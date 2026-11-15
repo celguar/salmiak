@@ -16,8 +16,8 @@ public partial class MainWindow
 
     private void EditWmo_Click(object sender, RoutedEventArgs e)
     {
-        if (_viewport == null || _mpq == null) { StatusText.Text = "Open a WoW directory first."; return; }
-        if (_viewport.WmoEditMode) { StatusText.Text = "Already editing a WMO - Save & Close or Cancel first."; return; }
+        if (_viewport == null || _mpq == null) { Say("Open a WoW directory first."); return; }
+        if (_viewport.WmoEditMode) { Say("Already editing a WMO - Save & Close or Cancel first."); return; }
 
         var pick = ShowWmoEditPicker();
         if (pick.Path == null) return;
@@ -29,7 +29,7 @@ public partial class MainWindow
                 System.IO.Path.GetFileNameWithoutExtension(pick.Path) + "_copy");
             if (string.IsNullOrWhiteSpace(name)) return;
             var np = _viewport.CopyWmo(pick.Path, name);
-            if (np == null) { StatusText.Text = "Copy WMO failed."; return; }
+            if (np == null) { Say("Copy WMO failed."); return; }
             target = np;
             _allWmosCache = null;
         }
@@ -38,7 +38,7 @@ public partial class MainWindow
         _viewport.SetPrimaryMode(GlViewport.EditorMode.Doodad);
         WmoEditBar.Visibility = Visibility.Visible;
         WmoEditLabel.Text = $"WMO edit: {System.IO.Path.GetFileName(target)} - place furniture (N), then Save & Close";
-        StatusText.Text = "WMO edit mode - press N to pick furniture, click to place on the WMO surface.";
+        Say("WMO edit mode - press N to pick furniture, click to place on the WMO surface.");
 
         PopulateWmoSetBox();
     }
@@ -70,9 +70,9 @@ public partial class MainWindow
         string? name = PromptText("New furniture set", "Set name:", $"Set {WmoSetBox.Items.Count}");
         if (name == null) return;
         int idx = _viewport.AddWmoEditDoodadSet(name);
-        if (idx < 0) { StatusText.Text = "Couldn't add furniture set."; return; }
+        if (idx < 0) { Say("Couldn't add furniture set."); return; }
         PopulateWmoSetBox(idx);
-        StatusText.Text = "New furniture set added & selected - place furniture, then Save & Close.";
+        Say("New furniture set added & selected - place furniture, then Save & Close.");
     }
 
     private void WmoEditSave_Click(object sender, RoutedEventArgs e)
@@ -82,7 +82,7 @@ public partial class MainWindow
         int n = _viewport.SaveWmoEdit();
         _viewport.ExitWmoEdit(save: false);
         WmoEditBar.Visibility = Visibility.Collapsed;
-        StatusText.Text = $"Saved {n} doodad(s) into {name}. Export to MPQ to use it in-game.";
+        Say($"Saved {n} doodad(s) into {name}. Export to MPQ to use it in-game.");
     }
 
     private void WmoEditCancel_Click(object sender, RoutedEventArgs e)
@@ -90,7 +90,7 @@ public partial class MainWindow
         if (_viewport == null) { WmoEditBar.Visibility = Visibility.Collapsed; return; }
         _viewport.ExitWmoEdit(save: false);
         WmoEditBar.Visibility = Visibility.Collapsed;
-        StatusText.Text = "WMO edit cancelled.";
+        Say("WMO edit cancelled.");
     }
 
     private (string? Path, bool Copy) ShowWmoEditPicker()
@@ -307,14 +307,14 @@ public partial class MainWindow
         try { if (win.ShowDialog() != true) return; } finally { _viewport.ModalOpen = false; }
 
         if (int.TryParse(idBox.Text.Trim(), out int chosenId) && chosenId >= 0) _viewport.SetAreaId(chosenId);
-        else StatusText.Text = "Area-id paint: enter a non-negative integer.";
+        else Say("Area-id paint: enter a non-negative integer.");
     }
 
     private void ShowGeneratePicker()
     {
         if (_viewport == null) return;
         var textures = _viewport.LoadedTextures();
-        if (textures.Count == 0) { StatusText.Text = "Ground generator: no textures loaded yet."; return; }
+        if (textures.Count == 0) { Say("Ground generator: no textures loaded yet."); return; }
 
         var thumbs = new Dictionary<string, System.Windows.Media.ImageSource?>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in textures) thumbs[t] = DecodeThumbnail(t);
@@ -420,7 +420,7 @@ public partial class MainWindow
     {
         if (_viewport == null) return;
         var textures = _viewport.LoadedTextures();
-        if (textures.Count == 0) { StatusText.Text = "Road: no textures loaded yet."; return; }
+        if (textures.Count == 0) { Say("Road: no textures loaded yet."); return; }
 
         var thumbs = new Dictionary<string, System.Windows.Media.ImageSource?>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in textures) thumbs[t] = DecodeThumbnail(t);
@@ -580,7 +580,7 @@ public partial class MainWindow
     {
         if (_viewport == null) return;
         var textures = _viewport.LoadedTextures();
-        if (textures.Count == 0) { StatusText.Text = "Auto-paint: no textures loaded yet."; return; }
+        if (textures.Count == 0) { Say("Auto-paint: no textures loaded yet."); return; }
 
         var thumbs = new Dictionary<string, System.Windows.Media.ImageSource?>(StringComparer.OrdinalIgnoreCase);
         foreach (var t in textures) thumbs[t] = DecodeThumbnail(t);
@@ -704,7 +704,7 @@ public partial class MainWindow
             if (playingBtn == btn) { StopPreview(); return; }
             StopPreview();
             string? path = mpqFile();
-            if (path == null || _mpq == null) { StatusText.Text = "Preview: no sound file for that entry."; return; }
+            if (path == null || _mpq == null) { Say("Preview: no sound file for that entry."); return; }
             try
             {
                 byte[] bytes;
@@ -717,9 +717,9 @@ public partial class MainWindow
                 player.Open(new Uri(tmp));
                 player.Play();
                 playingBtn = btn; btn.Content = "■";
-                StatusText.Text = $"Playing {System.IO.Path.GetFileName(path)}";
+                Say($"Playing {System.IO.Path.GetFileName(path)}");
             }
-            catch (Exception ex) { StatusText.Text = $"Preview failed: {ex.Message}"; }
+            catch (Exception ex) { Say($"Preview failed: {ex.Message}"); }
         }
 
         System.Windows.Controls.ComboBox Combo(List<(uint Id, string Label)> options, Func<uint, string?>? preview = null)

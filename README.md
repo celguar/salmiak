@@ -71,6 +71,7 @@
 
 ## View and misc
 
+* **Message log**: the status bar keeps only the newest message, so several of them in a row used to flash past each other. The **Log** button in the status bar opens a panel over the viewport corner listing every message this session made, with a time stamp, newest first and scrollable; a burst of the same message collapses into one line with **×N**. Click the button again to close it (the log keeps collecting while hidden), and **Clear** empties it. Live readouts such as the streaming tile count stay on the status bar only, so they cannot bury the real messages.
 * **Minimap** `[M]`, **wireframe** `[F]`, **debug views** `[G]`, **doodads on / off** `[T]`, **WMOs on / off** `[Y]`.
 * **Doodad animation on / off** `[V]`.
 * **Undo** `[Ctrl+Z]` / **redo** `[Ctrl+Y]`, **screenshot to clipboard** `[Ctrl+Shift+P]`, **full key sheet** `[F1]`.

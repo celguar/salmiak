@@ -97,7 +97,7 @@ public partial class MainWindow
         s.Save();
         _db = null;
         _ctModelColumn = null;
-        StatusText.Text = "Database settings saved.";
+        Say("Database settings saved.");
     }
 
     private string? _ctModelColumn;
@@ -118,13 +118,13 @@ public partial class MainWindow
     {
         if (_viewport == null) return;
         if (_viewport.MapName == null || _mpq == null)
-        { StatusText.Text = "NPC view: load a map first."; _viewport.SetPrimaryMode(GlViewport.EditorMode.None); return; }
+        { Say("NPC view: load a map first."); _viewport.SetPrimaryMode(GlViewport.EditorMode.None); return; }
 
         try
         {
             _mapIds ??= CreatureModels.LoadMapIds(p => _mpq.OpenFile(p));
             if (!_mapIds.TryGetValue(_viewport.MapName, out int mapId))
-            { StatusText.Text = $"NPC view: no map id for '{_viewport.MapName}' in Map.dbc."; return; }
+            { Say($"NPC view: no map id for '{_viewport.MapName}' in Map.dbc."); return; }
 
             _ctModelColumn ??= DetectModelColumn();
             string mc = _ctModelColumn;
@@ -149,11 +149,11 @@ public partial class MainWindow
                     Convert.ToSingle(r["o"]), Convert.ToSingle(r["sc"])));
             }
             _viewport.ShowNpcs(spawns);
-            StatusText.Text = $"NPC view - {spawns.Count} spawn(s) on {_viewport.MapName} (models stream in).";
+            Say($"NPC view - {spawns.Count} spawn(s) on {_viewport.MapName} (models stream in).");
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"NPC view: database error - {ex.Message} (check File > Database Connection).";
+            Say($"NPC view: database error - {ex.Message} (check File > Database Connection).");
             _viewport.SetPrimaryMode(GlViewport.EditorMode.None);
         }
     }
@@ -162,13 +162,13 @@ public partial class MainWindow
     {
         if (_viewport == null) return;
         if (_viewport.MapName == null || _mpq == null)
-        { StatusText.Text = "Herb view: load a map first."; _viewport.SetPrimaryMode(GlViewport.EditorMode.None); return; }
+        { Say("Herb view: load a map first."); _viewport.SetPrimaryMode(GlViewport.EditorMode.None); return; }
 
         try
         {
             _mapIds ??= CreatureModels.LoadMapIds(p => _mpq.OpenFile(p));
             if (!_mapIds.TryGetValue(_viewport.MapName, out int mapId))
-            { StatusText.Text = $"Herb view: no map id for '{_viewport.MapName}' in Map.dbc."; return; }
+            { Say($"Herb view: no map id for '{_viewport.MapName}' in Map.dbc."); return; }
 
             var rows = Db.Query(
                 "SELECT g.guid gu, g.id e, gt.name nm, gt.displayId d, gt.size sc, gt.data0 lk, " +
@@ -188,7 +188,7 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Herb view: database error - {ex.Message} (check File > Database Connection).";
+            Say($"Herb view: database error - {ex.Message} (check File > Database Connection).");
             _viewport.SetPrimaryMode(GlViewport.EditorMode.None);
         }
     }
@@ -218,14 +218,14 @@ public partial class MainWindow
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Patrol: database error - {ex.Message}";
+            Say($"Patrol: database error - {ex.Message}");
         }
     }
 
     private void Deploy_Click(object sender, RoutedEventArgs e)
     {
         if (_viewport == null || _mpq == null)
-        { StatusText.Text = "Deploy: open a WoW directory and a map first."; return; }
+        { Say("Deploy: open a WoW directory and a map first."); return; }
 
         var s = Properties.Settings.Default;
         if (string.IsNullOrWhiteSpace(s.DeployClientPatch) && !string.IsNullOrEmpty(_wowDataPath))
@@ -240,7 +240,7 @@ public partial class MainWindow
         int zones = _viewport.NewZoneCount;
         int wmos = _mpq.Overrides.Count;
         if (tiles + flights + zones + wmos == 0)
-        { StatusText.Text = "Deploy: there are no pending edits."; return; }
+        { Say("Deploy: there are no pending edits."); return; }
 
         List<string> warns;
         try { warns = _viewport.DeployWarnings(); }
@@ -363,7 +363,7 @@ public partial class MainWindow
                 var report = RunDeploy(patchPath, serverDir, restart.IsChecked == true, applySql.IsChecked == true);
                 win.Close();
                 System.Windows.MessageBox.Show(this, string.Join("\n", report), "Deploy complete", MessageBoxButton.OK, MessageBoxImage.Information);
-                StatusText.Text = "Deploy complete.";
+                Say("Deploy complete.");
             }
             catch (Exception ex)
             {

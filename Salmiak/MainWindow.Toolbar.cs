@@ -180,5 +180,6 @@ FLIGHT PATHS  (B)
 CAMERA   WASD move · E/Space up · Q down · RMB look · scroll = speed
 VIEW     F wireframe · G debug view · T doodads on/off · Y WMOs on/off · M minimap · Ctrl+Shift+P screenshot to clipboard
 EDIT     Ctrl+Z undo · Ctrl+Y (or Ctrl+Shift+Z) redo · Ctrl+S save · Ctrl+O load
+LOG      Log button in the status bar: every message this session made, newest first, scrollable (×N = repeats in a row)
 HELP     F1  toggle this sheet";
 }

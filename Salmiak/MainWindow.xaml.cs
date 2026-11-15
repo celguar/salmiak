@@ -37,8 +37,10 @@ public partial class MainWindow : Window
             Dispatcher.Invoke(() => CamText.Text = $"X:{pos.X:F0} Y:{pos.Y:F0} Z:{pos.Z:F0}");
         _viewport.DebugModeChanged += name =>
             Dispatcher.Invoke(() => DebugText.Text = $"View: {name}  (G)");
+        //A live readout of how much of the map is streamed in: the count climbs while you travel,
+        //so it gets the status bar only and never joins the message log.
         _viewport.TileCountChanged += n =>
-            Dispatcher.Invoke(() => StatusText.Text = $"{n} tiles loaded");
+            Dispatcher.Invoke(() => Status($"{n} tiles loaded"));
         _viewport.LoadingChanged += loading =>
             Dispatcher.Invoke(() => LoadingText.Visibility =
                 loading ? Visibility.Visible : Visibility.Collapsed);
@@ -58,7 +60,7 @@ public partial class MainWindow : Window
         _viewport.LoadRequested += () => Dispatcher.BeginInvoke(() => LoadEdits_Click(this, new RoutedEventArgs()));
         _viewport.CameraSpeedChanged += s => Dispatcher.Invoke(() => SpeedText.Text = $"Speed: {s:F0}");
         _viewport.FlightPathsChanged += on => Dispatcher.Invoke(() => FlightPathsMenu.IsChecked = on);
-        _viewport.Notify += msg => Dispatcher.Invoke(() => StatusText.Text = msg);
+        _viewport.Notify += msg => Dispatcher.Invoke(() => Say(msg));
         _viewport.OpenGeneratePicker += () => Dispatcher.BeginInvoke(ShowGeneratePicker);
         _viewport.OpenAreaPicker += () => Dispatcher.BeginInvoke(ShowAreaIdPicker);
         _viewport.OpenRoadPicker += () => Dispatcher.BeginInvoke(ShowRoadPicker);

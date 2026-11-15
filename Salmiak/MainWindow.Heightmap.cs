@@ -16,7 +16,7 @@ public partial class MainWindow
     private void ImportHeightmap_Click(object sender, RoutedEventArgs e)
     {
         if (_viewport == null || _viewport.MapName == null)
-        { StatusText.Text = "Import heightmap: open a terrain map first."; return; }
+        { Say("Import heightmap: open a terrain map first."); return; }
 
         var dlg = new Microsoft.Win32.OpenFileDialog
         {
@@ -69,11 +69,11 @@ public partial class MainWindow
         try { if (win.ShowDialog() != true) return; } finally { _viewport.ModalOpen = false; }
 
         if (!float.TryParse(minBox.Text.Trim(), out float minH) || !float.TryParse(maxBox.Text.Trim(), out float maxH))
-        { StatusText.Text = "Import heightmap: min/max must be numbers."; return; }
-        if (maxH <= minH) { StatusText.Text = "Import heightmap: max height must be greater than min."; return; }
+        { Say("Import heightmap: min/max must be numbers."); return; }
+        if (maxH <= minH) { Say("Import heightmap: max height must be greater than min."); return; }
 
         if (_viewport.BeginHeightmapPlacement(lum, iw, ih, minH, maxH, flip.IsChecked == true))
-            StatusText.Text = "Heightmap armed - click two terrain corners to mark the rectangle (Esc to cancel).";
+            Say("Heightmap armed - click two terrain corners to mark the rectangle (Esc to cancel).");
     }
 
     private static float[] LoadLuminance(string path, out int w, out int h)

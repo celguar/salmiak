@@ -293,15 +293,15 @@ public partial class MainWindow
     private void BakeShadowNow()
     {
         if (_viewport == null) return;
-        if (_viewport.MapName == null) { StatusText.Text = "Bake shadows: open a terrain map first."; return; }
+        if (_viewport.MapName == null) { Say("Bake shadows: open a terrain map first."); return; }
         int chunks = _viewport.BakedChunkCount;
         bool selected = chunks > 0;
         var scope = selected ? GlViewport.BakeScope.SelectedChunks : GlViewport.BakeScope.EditedTiles;
         //No blocking call here: the viewport render loop walks the bake a few chunks per frame, so
         //the window stays alive and the bar above fills up while the rays run.
         if (!_viewport.StartShadowBake(scope)) return;
-        StatusText.Text = selected ? $"Ray-baking {chunks} chunk(s) - watch the bar."
-            : "Ray-baking the edited tiles - watch the bar.";
+        Say(selected ? $"Ray-baking {chunks} chunk(s) - watch the bar."
+            : "Ray-baking the edited tiles - watch the bar.");
         if (_shadowHint != null) _shadowHint.Text = "Baking, one chunk per slice - Ctrl+Z undoes when the bar is full.";
         //The chunk list is deliberately kept so the sun can be retuned and the same chunks rebaked.
     }

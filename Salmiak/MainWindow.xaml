@@ -87,6 +87,10 @@
                                Text="Ready - set your WoW directory first (File &gt; Set WoW Directory)" />
                     <TextBlock x:Name="SpeedText" Foreground="#9cd9ff" FontWeight="Bold"
                                Margin="16,0,0,0" Text="Speed: 100" />
+                    <Button x:Name="LogToggle" Content="Log" Click="ToggleLog_Click"
+                            Padding="8,1" Margin="14,0,0,0" Background="#33333a" BorderThickness="0"
+                            Foreground="#9cd9ff" FontWeight="Bold" FontSize="11"
+                            ToolTip="Show every message this session has made, newest first (scrollable). Click again to close." />
                 </StackPanel>
             </StatusBarItem>
             <StatusBarItem HorizontalAlignment="Right">
@@ -168,6 +172,31 @@
                     <TextBlock x:Name="HudStats" HorizontalAlignment="Right" VerticalAlignment="Bottom"
                                Margin="8" Foreground="#B3D9B3" FontSize="11" Opacity="0.9" />
                 </Grid>
+
+                <Border x:Name="LogPanel" Visibility="Collapsed" HorizontalAlignment="Left"
+                        VerticalAlignment="Bottom" Margin="8,0,0,8" Width="430" Height="250"
+                        Background="#E6252526" BorderBrush="#4a4a5a" BorderThickness="1"
+                        CornerRadius="5">
+                    <DockPanel>
+                        <Border DockPanel.Dock="Top" Background="#2f2f34" BorderBrush="#4a4a5a"
+                                BorderThickness="0,0,0,1">
+                            <DockPanel>
+                                <Button x:Name="LogClear" DockPanel.Dock="Right" Content="Clear"
+                                        Click="LogClear_Click" Padding="6,1" Margin="0,0,10,4"
+                                        Background="#2f2f34" BorderThickness="0" Foreground="#8a8a92"
+                                        FontSize="11" ToolTip="Forget the messages logged so far" />
+                                <TextBlock x:Name="LogHeader" Foreground="#9cd9ff" FontSize="11"
+                                           FontWeight="Bold" VerticalAlignment="Center"
+                                           Margin="10,0,0,0" />
+                            </DockPanel>
+                        </Border>
+                        <ScrollViewer VerticalScrollBarVisibility="Auto"
+                                      HorizontalScrollBarVisibility="Disabled" Margin="10,6,2,8">
+                            <TextBlock x:Name="LogText" Foreground="#cdd6e0" FontSize="11.5"
+                                       FontFamily="Consolas, Courier New" TextWrapping="Wrap" />
+                        </ScrollViewer>
+                    </DockPanel>
+                </Border>
             </Grid>
         </Grid>
     </DockPanel>

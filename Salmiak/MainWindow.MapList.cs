@@ -56,7 +56,7 @@ public partial class MainWindow
         if (MapList.Items.Count == 0)
         {
             var diag = _mpq?.ArchiveDiagnostics("terrain.MPQ") ?? "mpq null";
-            StatusText.Text = $"No maps found. terrain.MPQ hash table: {diag}";
+            Say($"No maps found. terrain.MPQ hash table: {diag}");
         }
     }
 
@@ -76,7 +76,7 @@ public partial class MainWindow
     {
         try
         {
-            StatusText.Text = $"Loading {mapName}...";
+            Say($"Loading {mapName}...");
             PopulateGoTo(mapName);
 
             var wdtPath = $@"World\Maps\{mapName}\{mapName}.wdt";
@@ -86,9 +86,9 @@ public partial class MainWindow
 
             if (wdt.IsWmoOnly)
             {
-                if (wdt.GlobalWmoDef == null) { StatusText.Text = $"{mapName}: WMO-only map but no WMO reference."; return; }
+                if (wdt.GlobalWmoDef == null) { Say($"{mapName}: WMO-only map but no WMO reference."); return; }
                 _viewport!.LoadGlobalWmo(wdt, mapName);
-                StatusText.Text = $"Loaded {mapName} (WMO-only - view/doodads, no terrain)";
+                Say($"Loaded {mapName} (WMO-only - view/doodads, no terrain)");
                 return;
             }
 
@@ -96,14 +96,14 @@ public partial class MainWindow
             for (int y = 0; y < WdtFile.GridSize && !any; y++)
             for (int x = 0; x < WdtFile.GridSize && !any; x++)
                 if (wdt.TileExists[y, x]) any = true;
-            if (!any) { StatusText.Text = $"{mapName}: no tiles in WDT."; return; }
+            if (!any) { Say($"{mapName}: no tiles in WDT."); return; }
 
             _viewport!.StreamMap(wdt, mapName);
-            StatusText.Text = $"Streaming {mapName} (radius {_viewport.LoadRadius})";
+            Say($"Streaming {mapName} (radius {_viewport.LoadRadius})");
         }
         catch (Exception ex)
         {
-            StatusText.Text = $"Error loading {mapName}: {ex.Message}";
+            Say($"Error loading {mapName}: {ex.Message}");
         }
     }
 
@@ -133,7 +133,7 @@ public partial class MainWindow
             item.Tag is ValueTuple<string, float, float, float> c)
         {
             _viewport.TeleportTo(c.Item2, c.Item3, c.Item4);
-            StatusText.Text = $"Teleported to {c.Item1}";
+            Say($"Teleported to {c.Item1}");
         }
     }
 }
