@@ -134,6 +134,9 @@
             <Border Grid.Column="0" x:Name="ShadowSide" Background="#252526" Padding="6"
                     Visibility="Collapsed" />
 
+            <Border Grid.Column="0" x:Name="LiquidSide" Background="#252526" Padding="6"
+                    Visibility="Collapsed" />
+
             <Grid Grid.Column="2">
                 <Border x:Name="GlHost" />
                 <Grid IsHitTestVisible="False">

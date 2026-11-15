@@ -64,9 +64,11 @@ public partial class MainWindow
     {
         if (_viewport == null || _toolButtons.Count == 0) return;
         //The shadow sidebar runs first: when it leaves, it hands the panel slot back to the map
-        //panel, and UpdateDoodadDrawer below then re-decides whether the drawer owns that slot.
+        //panel, and the drawers below then re-decide whether they own that slot. The liquid sidebar
+        //goes last so that, while it is the tool that is active, it wins the slot outright.
         UpdateShadowPanel();
         UpdateDoodadDrawer();
+        UpdateLiquidPanel();
         var cur = _viewport.CurrentTool;
         foreach (var (tool, btn) in _toolButtons)
             btn.Background = tool == cur ? ToolActive : ToolIdle;
@@ -161,6 +163,17 @@ SCULPT  (Ctrl+E)
 LIQUIDS  (Ctrl+U)
   click a liquid = select its whole body   ·   scroll = surface height (Shift coarse)
   Ctrl+N pick a liquid to place (preview follows cursor, click fills)   Del remove   Esc deselect
+  the surface is one absolute height, not a fresh reading per click: the first click takes it from the
+  terrain, every later click reuses it, so a river keeps one level even when the brush has to be clicked
+  several times to reach the far end
+  the left sidebar holds Create liquid (the 4 types), the level box (the height the next click writes),
+  Set level (put that height over everything you selected), Level to cursor, Extend along bed (the
+  surface walks the terrain until the bed rises above it), Keep each chunk's own height (off = one flat
+  plane, which welds separately placed groups onto one level), Auto level (off = the box height rules
+  every click), Join bodies across heights (off: the bed decides, so a neighbour at another height
+  joins where the ground under their boundary is under water and a dam or a waterfall keeps its
+  pool apart; on: every chunk of that liquid) and Flow past the brush (chunks the surface walks into
+  straight after a click, 0 = brush only)
 
 TEXTURE PAINT  (Ctrl+T)
   LMB paint (the texture's layer is found per chunk)   ·   Ctrl+LMB erase that texture

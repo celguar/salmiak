@@ -265,11 +265,17 @@ public sealed partial class GlViewport
         if (LiquidMode)
         {
             if (_liqArmed != 0)
-                return $"Liquids (Ctrl+U) - placing {WaterTypeName(_liqArmed)}   [surface: terrain + {_liqPlaceLift:F2} yd]\n" +
-                       "LMB fill chunks under the brush   scroll = surface height   Ctrl+scroll brush size   Ctrl+N change liquid   Esc stop placing";
+            {
+                var surf = float.IsNaN(_liqLevel) ? $"terrain + {_liqPlaceLift:F2} yd" : $"{_liqLevel:F2} yd, one height for every click";
+                return $"Liquids (Ctrl+U) - placing {WaterTypeName(_liqArmed)}   [surface: {surf}]" +
+                       (_liqFlowReach > 0 ? $"   [flows {(_liqFlowReach)} chunks down the bed]" : "   [flow off: brush only]") + "\n" +
+                       "LMB fill chunks under the brush   scroll = surface height   Ctrl+scroll brush size   Ctrl+N change liquid   Esc stop placing\n" +
+                       "sidebar: Set level · Extend along bed · Keep each chunk's own height";
+            }
             if (_liqSel.Count > 0)
                 return $"Liquids (Ctrl+U) - {_liqSel.Count} chunk(s) selected @ {_liqSelLevel:F2}\n" +
-                       "drag the arrow handle or scroll = raise/lower surface (Shift = coarse)   Del remove liquid   Ctrl+N place new   Esc deselect   Ctrl+Z undo / Ctrl+Y redo";
+                       "drag the arrow handle or scroll = raise/lower surface (Shift = coarse)   Del remove liquid   Ctrl+N place new   Esc deselect   Ctrl+Z undo / Ctrl+Y redo\n" +
+                       "sidebar: Set level to an exact height, and the Keep each chunk's own height box decides flat vs. moved";
             return "Liquids mode (Ctrl+U)\n" +
                    "click a liquid to select its whole body   Ctrl+N / middle-click pick a liquid to place   Ctrl+U exit";
         }

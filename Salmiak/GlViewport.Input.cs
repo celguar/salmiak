@@ -362,8 +362,8 @@ public sealed partial class GlViewport
             else if (RoadMode) { RoadMode = false; Notify?.Invoke("Road off."); }
             else if (AutoPaintMode) { AutoPaintMode = false; Notify?.Invoke("Slope auto-paint off."); }
             else if (RiverMode) { RiverMode = false; _riverNodes.Clear(); _riverVertCount = 0; Notify?.Invoke("River carve off."); }
-            else if (LiquidMode && _liqArmed != 0) { _liqArmed = 0; Notify?.Invoke("Liquid placement disarmed."); ModeChanged?.Invoke(ModeLabel()); }
-            else if (LiquidMode && _liqSel.Count > 0) { _liqSel.Clear(); _liqScrollStroke = null; Notify?.Invoke("Liquid deselected."); ModeChanged?.Invoke(ModeLabel()); }
+            else if (LiquidMode && _liqArmed != 0) { _liqArmed = 0; _liqLevel = float.NaN; Notify?.Invoke("Liquid placement disarmed."); ModeChanged?.Invoke(ModeLabel()); }
+            else if (LiquidMode && _liqSel.Count > 0) { _liqSel.Clear(); _liqScrollStroke = null; _liqLevel = float.NaN; Notify?.Invoke("Liquid deselected."); ModeChanged?.Invoke(ModeLabel()); }
             else if (FlightMode)
             {
                 if (_flightDrawing) FinishFlightDraw();
@@ -698,8 +698,17 @@ public sealed partial class GlViewport
             float step = (shift ? 2f : 0.25f) * (e.Delta > 0 ? 1 : -1);
             if (_liqArmed != 0)
             {
-                _liqPlaceLift += step;
-                Notify?.Invoke($"Liquid surface: terrain + {_liqPlaceLift:F2} yd");
+                if (float.IsNaN(_liqLevel))
+                {
+                    _liqPlaceLift += step;
+                    Notify?.Invoke($"Liquid surface: terrain + {_liqPlaceLift:F2} yd");
+                }
+                else
+                {
+                    _liqLevel += step;
+                    Notify?.Invoke($"Liquid surface: {_liqLevel:F2} yd - that height now applies to every click");
+                }
+                ModeChanged?.Invoke(ModeLabel());
             }
             else AdjustSelectedLiquid(step);
         }

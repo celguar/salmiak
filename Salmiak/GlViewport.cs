@@ -136,7 +136,7 @@ public sealed partial class GlViewport : GLWpfControl, IDisposable
         if (!DoodadMode) PlaceDoodad = null;
         if (!WmoMode) PlaceWmo = null;
         if (!EditMode) { FlattenMode = false; DeleteMode = false; SmoothMode = false; NoiseMode = false; ShadowMode = false; }
-        if (!LiquidMode) { _liqSel.Clear(); _liqArmed = 0; _liqScrollStroke = null; }
+        if (!LiquidMode) { _liqSel.Clear(); _liqArmed = 0; _liqScrollStroke = null; _liqLevel = float.NaN; }
         if (!EditMode && !TextureMode) _blendMode = false;
         _areaMode = false;
         //Leaving sculpt mode also drops the bake-chunk picker, so the Shadows tool unselects.
@@ -238,7 +238,7 @@ public sealed partial class GlViewport : GLWpfControl, IDisposable
         EditorMode.Texture => string.IsNullOrEmpty(PaintTexture) ? "Mode: Texture (no texture)" : "Mode: Paint " + System.IO.Path.GetFileName(PaintTexture),
         EditorMode.Doodad  => "Mode: Doodads",
         EditorMode.Wmo     => "Mode: WMOs",
-        EditorMode.Liquid  => _liqArmed != 0 ? $"Mode: Liquids - placing {WaterTypeName(_liqArmed)}"
+        EditorMode.Liquid  => _liqArmed != 0 ? $"Mode: Liquids - placing {WaterTypeName(_liqArmed)}{(float.IsNaN(_liqLevel) ? "" : $" @ {_liqLevel:F1}")}"
                             : _liqSel.Count > 0 ? $"Mode: Liquids - {_liqSel.Count} chunk(s) @ {_liqSelLevel:F1}"
                             : "Mode: Liquids",
         EditorMode.FlightPath => _selectedPath != null ? $"Mode: Taxi - {_selectedPath.Name}" : "Mode: Taxi",

@@ -87,6 +87,7 @@ public partial class MainWindow : Window
         BuildToolbar();
         BuildDoodadDrawer();
         BuildShadowPanel();
+        BuildLiquidPanel();
         SpeedText.Text = $"Speed: {_viewport.CameraSpeed:F0}";
 
         var saved = Properties.Settings.Default.WoWDataPath;

@@ -39,8 +39,15 @@
 
 ## Water `(Ctrl+U)`
 
-* **Click a liquid** to select the whole body; re-level by `[scroll]` (coarse with `[Shift]`) or drag the height gizmo.
+* **Click a liquid** to select the whole body, as far as the bed lets water through: a neighbour at a
+  different height joins the selection wherever the ground under the shared boundary sits under the
+  water, so every group a run of clicks left behind comes back as one selection and one re-level
+  reaches all of it, while a dam or a waterfall lip keeps its pool apart. `Join bodies across
+  heights` drops that bed test. Re-level by `[scroll]` (coarse with `[Shift]`) or drag the height gizmo.
 * **Place new water** `[Ctrl+N]`, remove `[Del]`, set the type (water, ocean, magma, slime).
+* **The surface is one absolute height, not a fresh reading per click.** The first click takes it from the terrain under the cursor; every later click reuses it, so walking the brush along a long river keeps one level instead of leaving one group of chunks per click at the height of wherever you clicked. `[scroll]` then dials that height, `[Ctrl+scroll]` the brush.
+* **The surface also walks the bed**: after the brush fills the chunks it touches, the level flows into the neighbour chunks whose boundary with the water sits below it, up to **Flow past the brush** chunks (0 = brush only). A bank or a waterfall lip that rises above the surface stops it, so a river gets filled to the next rapid without leaking sideways over a flat shore. `Extend along bed` walks the same rule further from whatever you selected, so pressing it again keeps following the river.
+* **The left sidebar swaps in while the tool is active**, like the Shadows sidebar, and holds: the four liquid types plus **Place liquid**, the **level** box (the one height the next click writes, and the height a re-level goes to), **Set level**, **Level to cursor** (level the body to the shoreline you click), **Extend along bed**, **Keep each chunk's own height** (off = the selection becomes one flat plane, which is what welds separately placed groups of a river onto one level), **Join bodies across heights** (one click selects the whole connected liquid whatever heights its parts sit at, so one re-level reaches all of it) and **Flow past the brush** and **Lift above terrain** (how far a click sits over the ground when the level is still auto).
 
 ## Zones and lighting `(Ctrl+A)`
 
