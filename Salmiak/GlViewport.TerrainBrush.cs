@@ -324,6 +324,10 @@ public sealed partial class GlViewport
         public int Index;
         //Current slice size, in chunks; 0 until the first slice has been timed.
         public int Slice;
+        //The ground each target's rays start on, as the span of the tile it lives in: the box test
+        //below needs it per chunk, and a chunk's own heightmap is not enough because a texel on a
+        //chunk border leans on the next chunk's height vertices, which can be much higher or lower.
+        public float[] HyLo = [], HyHi = [];
         public string Map = "";
     };
 
@@ -418,11 +422,12 @@ public sealed partial class GlViewport
                     if (string.IsNullOrEmpty(w.ModelPath)) continue;
                     var groups = _wmos.GetCpuGroups(w.ModelPath);
                     if (groups.Count == 0) continue;
-                    if (!_wmos.TryGetModelAabb(w.ModelPath, out var wmn, out var wmx)) continue;
+                    //The placement's transform, and nothing else. The box each group is culled by
+                    //comes from that group's own triangles below, which lets a model that was never
+                    //uploaded for drawing still bake, and keeps a block of a city from being culled
+                    //by a sphere as large as the block.
                     var wxf = Salmiak.Rendering.WmoRenderer.BuildTransform(w);
                     var winv = wxf.Inverted();
-                    var wcr = Vector3.TransformPosition((wmn + wmx) * 0.5f, wxf);
-                    float wr = Math.Max(2f, (wmx - wmn).Length * 0.5f);
                     foreach (var grp in groups)
                     {
                         if (grp.Vertices.Length < WmoFile.GroupVertexStride || grp.Indices.Length < 3) continue;
@@ -436,12 +441,10 @@ public sealed partial class GlViewport
                                 if (tr.Alpha && tr.Tex.Length > 0)
                                 {
                                     if (!wmoTex.TryGetValue(tr.Tex, out var dec))
-                                    {
-                                        dec = (new byte[0], 0, 0);
-                                        try { using var ts = _mpq!.OpenFile(tr.Tex.Replace('/', '\\')); dec = BlpReader.Decode(ts); }
-                                        catch { }
-                                        wmoTex[tr.Tex] = dec;
-                                    }
+                                        //The renderer's own decoded pixels: a WMO that is on screen has
+                                        //them already, so a bake near a city opens no BLP at all.
+                                        dec = _wmos!.CpuTexture(tr.Tex);
+                                    wmoTex[tr.Tex] = dec;
                                     var (decRgba, decW, decH) = dec;
                                     tr.Rgba = decRgba; tr.TW = decW; tr.TH = decH;
                                 }
@@ -450,11 +453,20 @@ public sealed partial class GlViewport
                             tpl = wmoTpl[grp] = new ShadowOcc { W = true, V = grp.Vertices, Idx = grp.Indices,
                                                                 Stride = WmoFile.GroupVertexStride, Ranges = ranges.ToArray() };
                             tpl.BBox = BuildTriBoxes(tpl.V, tpl.Idx, tpl.Stride);
+                            tpl.Grid = BuildTriGrid(tpl.Ranges, tpl.Idx, tpl.BBox);
+                            tpl.LB = tpl.Grid != null ? GridBox(tpl.Grid) : LocalBoxOf(tpl.V, tpl.Stride);
                         }
-                        if (tpl.Ranges.Length == 0) continue;
-                        wmoOcc.Add(new ShadowOcc { W = true, WC = wcr, WR = wr, Scale = 1f, Inv = winv,
+                        if (tpl.Ranges.Length == 0 || tpl.LB.Length < 6) continue;
+                        //The group's own box through this placement's transform, re-boxed along the
+                        //world axes: this is what rejects the buildings a ray cannot reach at all.
+                        var wb = TransformBox(tpl.LB, wxf);
+                        if (wb.Length < 6) continue;
+                        var wcen = new Vector3((wb[0] + wb[3]) * 0.5f, (wb[1] + wb[4]) * 0.5f, (wb[2] + wb[5]) * 0.5f);
+                        var wdi = new Vector3(wb[3] - wb[0], wb[4] - wb[1], wb[5] - wb[2]);
+                        wmoOcc.Add(new ShadowOcc { W = true, WC = wcen, WR = Math.Max(2f, wdi.Length * 0.5f), Scale = 1f, Inv = winv,
                                                    V = tpl.V, Idx = tpl.Idx, Stride = tpl.Stride,
-                                                   Ranges = tpl.Ranges, BBox = tpl.BBox });
+                                                   Ranges = tpl.Ranges, BBox = tpl.BBox,
+                                                   LB = tpl.LB, WB = wb, Grid = tpl.Grid });
                     }
                 }
             }
@@ -469,7 +481,11 @@ public sealed partial class GlViewport
                     if (string.IsNullOrEmpty(d.ModelPath)) continue;
                     var cm = _doodads.GetCpuGeometry(d.ModelPath);
                     if (cm == null || cm.Indices.Length < 3 || cm.Submeshes.Length == 0) continue;
-                    if (!_doodads.TryGetModelBounds(d.ModelPath, out var mcen, out var mrad)) continue;
+                    //The model's own box comes from the CPU copy that was just read, not from the
+                    //renderer: a doodad whose GPU copy is still on its way can be baked anyway, and
+                    //its sphere then only has to be close enough for the box below to do the real
+                    //rejecting.
+                    var mrad = cm.Radius;
                     var dxf = Salmiak.Rendering.DoodadRenderer.BuildTransform(d);
                     if (!m2Tpl.TryGetValue(cm, out var tpl))
                     {
@@ -489,14 +505,23 @@ public sealed partial class GlViewport
                         tpl = m2Tpl[cm] = new ShadowOcc { W = false, V = cm.Vertices, Idx = cm.Indices,
                                                           Stride = 8, Ranges = ranges.ToArray() };
                         tpl.BBox = BuildTriBoxes(tpl.V, tpl.Idx, tpl.Stride);
+                        tpl.Grid = BuildTriGrid(tpl.Ranges, tpl.Idx, tpl.BBox);
+                        tpl.LB = tpl.Grid != null ? GridBox(tpl.Grid) : LocalBoxOf(tpl.V, tpl.Stride);
                     }
-                    if (tpl.Ranges.Length == 0) continue;
-                    var dcen = Vector3.TransformPosition(mcen, dxf);
+                    if (tpl.Ranges.Length == 0 || tpl.LB.Length < 6) continue;
+                    //The model's box through this placement, same as a WMO group gets its own: the
+                    //rays of a chunk only ever meet a doodad whose turned, scaled box lies inside
+                    //the segment they sweep.
+                    var wb = TransformBox(tpl.LB, dxf);
+                    if (wb.Length < 6) continue;
+                    var wcen = new Vector3((wb[0] + wb[3]) * 0.5f, (wb[1] + wb[4]) * 0.5f, (wb[2] + wb[5]) * 0.5f);
+                    var wdi = new Vector3(wb[3] - wb[0], wb[4] - wb[1], wb[5] - wb[2]);
                     float dr = Math.Max(0.5f, mrad * Math.Abs(d.Scale));
-                    m2Occ.Add(new ShadowOcc { W = false, WC = dcen, WR = dr, Inv = dxf.Inverted(),
+                    m2Occ.Add(new ShadowOcc { W = false, WC = wcen, WR = Math.Max(dr, wdi.Length * 0.5f), Inv = dxf.Inverted(),
                                               Scale = Math.Abs(d.Scale) < 1e-4f ? 1f : d.Scale,
                                               V = tpl.V, Idx = tpl.Idx, Stride = tpl.Stride,
-                                              Ranges = tpl.Ranges, BBox = tpl.BBox });
+                                              Ranges = tpl.Ranges, BBox = tpl.BBox,
+                                              LB = tpl.LB, WB = wb, Grid = tpl.Grid });
                 }
             }
 
@@ -532,6 +557,46 @@ public sealed partial class GlViewport
                                    Jitter = baseJitter, SubSamples = subSamples, SubThreshold = subThreshold,
                                    Blocks = texBlocks };
 
+        //The ground each target's rays start on, once per tile rather than per chunk: the box test
+        //that gathers a chunk's occluders has to know how high the ground runs, and a texel that sits
+        //on a chunk border leans on the next chunk's height vertices, which can be far higher or
+        //lower than the chunk's own ground - a chunk at the foot of a cliff is the case where this
+        //matters most. A texel outside a streamed tile has no ground at all, so it needs no span.
+        var hyLo = new float[targets.Count];
+        var hyHi = new float[targets.Count];
+        var spanOf = new Dictionary<AdtFile, (float Lo, float Hi)>();
+        for (int i = 0; i < targets.Count; i++)
+        {
+            var adt = targets[i].Adt;
+            if (!spanOf.TryGetValue(adt, out var span))
+                spanOf[adt] = span = GroundSpan(adt);
+            hyLo[i] = span.Lo;
+            hyHi[i] = span.Hi;
+        }
+
+        //TEMPORARY, one bake per session: the cell walk must decide the same thing as the plain walk.
+        //When it does not, dropping the grids of this bake keeps the shadows right, and the message
+        //says so rather than leaving a bake that quietly lost a shadow to be read as a bug.
+        if (ShadowGridCheck)
+        {
+            ShadowGridCheck = false;
+            var gridOk = CheckShadowGrids(wmoOcc, m2Occ, opt, maxDist);
+            if (gridOk == 2)
+            {
+                foreach (var lst in new[] { wmoOcc, m2Occ })
+                    foreach (var o in lst)
+                        o.Grid = null;
+                foreach (var t in wmoTpl.Values) t.Grid = null;
+                foreach (var t in m2Tpl.Values) t.Grid = null;
+                Notify?.Invoke("Shadow self-check: the triangle grid disagreed with the plain walk over the same triangles, " +
+                               "so the grids were dropped and this bake walks every triangle it is told about. The shadows are " +
+                               "the right ones either way, only slower.");
+            }
+            else if (gridOk == 0)
+                Notify?.Invoke("Shadow self-check: nothing testable in this bake, the grid walk was not compared. Report it only " +
+                               "as a note - the bake itself is unaffected.");
+        }
+
         foreach (var (adt, ch) in targets)
         {
             rec.Shadows[ch] = ch.ShadowMap != null ? (byte[])ch.ShadowMap.Clone() : null;
@@ -542,6 +607,7 @@ public sealed partial class GlViewport
         _job = new BakeJob { Targets = targets, Wmos = wmoOcc, M2s = m2Occ, Opt = opt, Rec = rec,
                              Touched = touched, Sun = sun, MaxDist = maxDist, Cs = cs, TexStep = texStep,
                              SubSamples = subSamples, SubThreshold = subThreshold, BaseJitter = baseJitter,
+                             HyLo = hyLo, HyHi = hyHi,
                              Map = _mapName ?? "" };
         ShadowBakeProgressReset?.Invoke();
         return true;
@@ -627,11 +693,22 @@ public sealed partial class GlViewport
         //the window's render thread, so the queued update reaches the sidebar bar at the frame end.
         if (to > from) ShadowBakeProgress?.Invoke(to, targets.Count);
 
+        //How far a soft pass may swing a ray sideways along the reach, in units of the reach: the
+        //jittered sub-samples fan around the straight sun ray, so the box cull per chunk below has
+        //to hold that fan as well. Rays of a bake that keeps the sun exact have none at all.
+        var dev = baseJitter > 0f ? Math.Min(0.5f, Math.Max(0.02f, baseJitter * maxDist * 0.5f)) : 0f;
+
         System.Threading.Tasks.Parallel.For(from, to, i =>
         {
             var ch = targets[i].Ch;
 
             var cc = new Vector3(-ch.Position.Y + cs / 2f, ch.Position.Z, -ch.Position.X + cs / 2f);
+
+            //The ground these rays start on, from the tile this chunk lives in (see PrepareShadowBake,
+            //where it is measured once per tile). A chunk at the foot of a cliff or of a city wall
+            //keeps its occluder whatever the height difference is.
+            var hy0 = i < j.HyLo.Length ? j.HyLo[i] : -1e4f;
+            var hy1 = i < j.HyHi.Length ? j.HyHi[i] : 1e4f;
 
             //No broadphase shortcut here. A chunk with nothing in reach still has to have every one
             //of its texels rewritten, otherwise a shadow the user brushed into such a chunk - or one
@@ -640,9 +717,9 @@ public sealed partial class GlViewport
             var localW = new List<ShadowOcc>();
             var localM = new List<ShadowOcc>();
             foreach (var m in wmoOcc)
-                if (BakeNear(cc, m, cs, maxDist, sun)) localW.Add(m);
+                if (BakeNear(cc, hy0, hy1, cs, maxDist, sun, dev, m)) localW.Add(m);
             foreach (var m in m2Occ)
-                if (BakeNear(cc, m, cs, maxDist, sun)) localM.Add(m);
+                if (BakeNear(cc, hy0, hy1, cs, maxDist, sun, dev, m)) localM.Add(m);
 
             var old = ch.ShadowMap;
             var map = old != null ? (byte[])old.Clone() : new byte[4096];
@@ -749,10 +826,10 @@ public sealed partial class GlViewport
         for (int i = 0; i < targets.Count; i++)
             if (j.Touched[i]) { baked++; dirty.Add(targets[i].Adt); }
 
-        //The CPU copies only exist for the rays, so drop them: a streamed map never has to keep
-        //several megabytes of duplicate geometry around once the bake is over.
-        _wmos?.ClearCpuGeometry();
-        _doodads?.ClearCpuGeometry();
+        //The CPU copies stay. They are what the next bake of the same stretch reads, and both
+        //renderers keep them within their own budget, so getting ready for a second bake of a city
+        //costs no read and no parse at all - which is why a bake near Ironforge or Orgrimmar used to
+        //spend tens of seconds before its bar could even start moving.
 
         if (baked == 0) { _job = null; Notify?.Invoke("Bake shadows: no occluders found in scope, nothing changed."); return 0; }
 
@@ -829,6 +906,31 @@ public sealed partial class GlViewport
         public int Stride;
         public TriRange[] Ranges = [];
         public float[] BBox = [];
+        //The box around this placement's own triangles in world space, and the same box in the
+        //geometry's own space. A whole city block is culled by a sphere as large as the block, so
+        //near Ironforge the sphere lets nearly every ray through and the ray then pays for a
+        //transform and a walk over the same building again; the box is what rejects it.
+        public float[] WB = [];
+        public float[] LB = [];
+        //The triangles of this geometry bucketed in its own space, shared by every placement of it
+        //since a ray is brought into that space anyway. Null when the geometry is too small for one
+        //to pay off, in which case its triangles are simply walked.
+        public TriGrid? Grid;
+    }
+
+    //The local-space triangle grid a ray walks: every triangle a range covers is bucketed into the
+    //cells its own box touches, so a ray only meets the triangles sitting in the cells it crosses
+    //instead of every triangle of every building in reach. A triangle whose box spans many cells
+    //goes to Wide instead, which is always tested: there are few of them, long walls and floor
+    //quads, and pasting them into hundreds of cells would cost more than testing them does.
+    private sealed class TriGrid
+    {
+        public int DX, DY, DZ;
+        public float MinX, MinY, MinZ, Cell;
+        public int[] Start = [];   // one past the last triangle of each cell, so cells + 1 entries
+        public int[] Tri = [];
+        public int[] Wide = [];
+        public int[] RangeOf = []; // which entry of Ranges covers a triangle, -1 when none does
     }
 
     private sealed class TriRange
@@ -856,8 +958,12 @@ public sealed partial class GlViewport
             }
             float minX = v[o0], minY = v[o0 + 1], minZ = v[o0 + 2];
             float maxX = minX, maxY = minY, maxZ = minZ;
-            foreach (int o in new[] { o1, o2 })
+            //Measured straight here, without a pair-sized array per triangle: this runs over every
+            //triangle of every model a bake reads, which is a large share of what getting ready
+            //costs near a city, and allocating for each triangle buries the compiler in garbage.
+            for (int k = 1; k <= 2; k++)
             {
+                int o = k == 1 ? o1 : o2;
                 if (v[o] < minX) minX = v[o]; else if (v[o] > maxX) maxX = v[o];
                 if (v[o + 1] < minY) minY = v[o + 1]; else if (v[o + 1] > maxY) maxY = v[o + 1];
                 if (v[o + 2] < minZ) minZ = v[o + 2]; else if (v[o + 2] > maxZ) maxZ = v[o + 2];
@@ -868,12 +974,234 @@ public sealed partial class GlViewport
         return bb;
     }
 
-    private static bool BakeNear(Vector3 cc, ShadowOcc m, float cs, float maxDist, Vector3 sun)
+    //The box around a geometry's own vertices, in its own space: the loosest box that costs nothing
+    //but a pass over the positions, and the fallback for a model with no grid of its own. Empty when
+    //there is nothing measurable in there.
+    private static float[] LocalBoxOf(float[] v, int stride)
+    {
+        var bb = new float[] { float.MaxValue, float.MaxValue, float.MaxValue,
+                               float.MinValue, float.MinValue, float.MinValue };
+        for (int o = 0; o + 2 < v.Length; o += stride)
+        {
+            float x = v[o], y = v[o + 1], z = v[o + 2];
+            if (!float.IsFinite(x) || !float.IsFinite(y) || !float.IsFinite(z)) continue;
+            if (x < bb[0]) bb[0] = x;
+            if (y < bb[1]) bb[1] = y;
+            if (z < bb[2]) bb[2] = z;
+            if (x > bb[3]) bb[3] = x;
+            if (y > bb[4]) bb[4] = y;
+            if (z > bb[5]) bb[5] = z;
+        }
+        return bb[0] > bb[3] ? [] : bb;
+    }
+
+    //The same box through a transform, re-boxed along the axes: a WMO is rotated, so the rays have
+    //to be rejected in world space against a box that grew to hold the turned one.
+    private static float[] TransformBox(float[] box, Matrix4 xf)
+    {
+        if (box.Length < 6) return [];
+        var bb = new float[] { float.MaxValue, float.MaxValue, float.MaxValue,
+                               float.MinValue, float.MinValue, float.MinValue };
+        for (int c = 0; c < 8; c++)
+        {
+            var p = Vector3.TransformPosition(new Vector3((c & 1) == 0 ? box[0] : box[3],
+                                                           (c & 2) == 0 ? box[1] : box[4],
+                                                           (c & 4) == 0 ? box[2] : box[5]), xf);
+            if (p.X < bb[0]) bb[0] = p.X;
+            if (p.Y < bb[1]) bb[1] = p.Y;
+            if (p.Z < bb[2]) bb[2] = p.Z;
+            if (p.X > bb[3]) bb[3] = p.X;
+            if (p.Y > bb[4]) bb[4] = p.Y;
+            if (p.Z > bb[5]) bb[5] = p.Z;
+        }
+        return bb[0] > bb[3] ? [] : bb;
+    }
+
+    //A grid's own box: the cells cover the boxes of every triangle bucketed into it, wide ones
+    //included, so this is the box the rays of this geometry can ever touch and the box a placement
+    //is culled by.
+    private static float[] GridBox(TriGrid g)
+    {
+        if (g.DX <= 0) return [];
+        return new float[] { g.MinX, g.MinY, g.MinZ,
+                             g.MinX + g.DX * g.Cell, g.MinY + g.DY * g.Cell, g.MinZ + g.DZ * g.Cell };
+    }
+
+    //The triangles of one geometry, bucketed in its own space: every triangle a range covers goes
+    //into the cells its own box touches, so a ray only meets the triangles that sit in the cells it
+    //crosses. A cell size around the size of a triangle is what keeps a ray down to the handful of
+    //triangles it passes, and triangles whose box spans many cells are kept aside in Wide instead,
+    //since pasting a long wall into a hundred cells costs more than testing it does for the few
+    //rays that reach it. Null for geometry too small or too lopsided for this to pay off, in which
+    //case its triangles are simply walked.
+    private static TriGrid? BuildTriGrid(TriRange[] ranges, uint[] idx, float[] bb)
+    {
+        int nTri = idx.Length / 3;
+        if (nTri < 96) return null;
+
+        // which range covers which triangle: a triangle no range covers is never tested at all, so
+        // it must not be in the grid either.
+        var rangeOf = new int[nTri];
+        for (int i = 0; i < nTri; i++) rangeOf[i] = -1;
+        for (int r = 0; r < ranges.Length; r++)
+        {
+            var rg = ranges[r];
+            int last = Math.Min(rg.Start + rg.Count, (int)idx.Length);
+            for (int rt = Math.Max(0, rg.Start) / 3, lastTri = last / 3; rt < lastTri; rt++)
+                rangeOf[rt] = r;
+        }
+
+        float minX = float.MaxValue, minY = float.MaxValue, minZ = float.MaxValue;
+        float maxX = float.MinValue, maxY = float.MinValue, maxZ = float.MinValue;
+        var span = 0f;
+        var covered = 0;
+        for (int t = 0; t < nTri; t++)
+        {
+            if (rangeOf[t] < 0) continue;
+            var b = t * 6;
+            if (b + 5 >= bb.Length || bb[b] > bb[b + 3]) continue;
+            float sx = bb[b + 3] - bb[b], sy = bb[b + 4] - bb[b + 1], sz = bb[b + 5] - bb[b + 2];
+            span += Math.Max(Math.Max(sx, sy), sz);
+            covered++;
+            if (bb[b] < minX) minX = bb[b];
+            if (bb[b + 1] < minY) minY = bb[b + 1];
+            if (bb[b + 2] < minZ) minZ = bb[b + 2];
+            if (bb[b] > maxX) maxX = bb[b];
+            if (bb[b + 1] > maxY) maxY = bb[b + 1];
+            if (bb[b + 2] > maxZ) maxZ = bb[b + 2];
+        }
+        if (covered == 0 || !(minX <= maxX) || !(minY <= maxY) || !(minZ <= maxZ)) return null;
+        float ex = maxX - minX, ey = maxY - minY, ez = maxZ - minZ;
+        var biggest = Math.Max(Math.Max(Math.Max(ex, ey), ez), 1e-3f);
+
+        //A cell around the size of a triangle is what keeps a ray down to the handful of triangles
+        //it really passes: a triangle then lands in a couple of cells, and the ray crosses only the
+        //cells it goes through. Bounded so a whole city cannot ask for a million cells.
+        var cell = Math.Max(1f, span / covered);
+        if (biggest / cell > 256f) cell = biggest / 256f;
+        if (!(cell > 1e-4f) || !float.IsFinite(cell)) return null;
+        int dx = Math.Max(1, (int)Math.Floor(ex / cell) + 1),
+            dy = Math.Max(1, (int)Math.Floor(ey / cell) + 1),
+            dz = Math.Max(1, (int)Math.Floor(ez / cell) + 1);
+        var cells = (long)dx * dy * dz;
+        if (cells > (1L << 20)) return null;
+        int cc = (int)cells;
+
+        int x0 = 0, x1 = 0, y0 = 0, y1 = 0, z0 = 0, z1 = 0;
+        var eps = cell * 1e-3f;
+        //The cells a triangle's own box touches. False when the box could not be measured at all,
+        //which puts the triangle in Wide: such a triangle reaches past the vertex array, and the ray
+        //test below throws it away just as the plain walk does.
+        bool CellsOf(int t)
+        {
+            var b = t * 6;
+            if (b + 5 >= bb.Length || bb[b] > bb[b + 3]) return false;
+            x0 = Math.Clamp((int)Math.Floor((bb[b] + eps - minX) / cell), 0, dx - 1);
+            x1 = Math.Clamp((int)Math.Floor((bb[b + 3] + eps - minX) / cell), 0, dx - 1);
+            y0 = Math.Clamp((int)Math.Floor((bb[b + 1] + eps - minY) / cell), 0, dy - 1);
+            y1 = Math.Clamp((int)Math.Floor((bb[b + 4] + eps - minY) / cell), 0, dy - 1);
+            z0 = Math.Clamp((int)Math.Floor((bb[b + 2] + eps - minZ) / cell), 0, dz - 1);
+            z1 = Math.Clamp((int)Math.Floor((bb[b + 5] + eps - minZ) / cell), 0, dz - 1);
+            return true;
+        }
+
+        var count = new int[cc];
+        var wide = new List<int>();
+        for (int t = 0; t < nTri; t++)
+        {
+            if (rangeOf[t] < 0) continue;
+            if (!CellsOf(t)) { wide.Add(t); continue; }
+            if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 8) { wide.Add(t); continue; }
+            for (var z = z0; z <= z1; z++)
+                for (var y = y0; y <= y1; y++)
+                {
+                    var row = (z * dy + y) * dx;
+                    for (var x = x0; x <= x1; x++) count[row + x]++;
+                }
+        }
+
+        var start = new int[cc + 1];
+        for (int c = 0; c < cc; c++) start[c + 1] = start[c] + count[c];
+        var tri = new int[start[cc]];
+        for (int c = 0; c < cc; c++) count[c] = start[c];
+        for (int t = 0; t < nTri; t++)
+        {
+            if (rangeOf[t] < 0) continue;
+            if (!CellsOf(t)) continue;
+            if ((x1 - x0 + 1) * (y1 - y0 + 1) * (z1 - z0 + 1) > 8) continue;
+            for (var z = z0; z <= z1; z++)
+                for (var y = y0; y <= y1; y++)
+                {
+                    var row = (z * dy + y) * dx;
+                    for (var x = x0; x <= x1; x++) tri[count[row + x]++] = t;
+                }
+        }
+        return new TriGrid
+        {
+            DX = dx, DY = dy, DZ = dz,
+            MinX = minX, MinY = minY, MinZ = minZ, Cell = cell,
+            Start = start, Tri = tri, Wide = wide.ToArray(), RangeOf = rangeOf,
+        };
+    }
+
+    //The loose test used when a placement carries no box of its own: the model's sphere, inflated by
+    //the reach of a ray from the chunk, plus the test that it is not behind the chunk along the sun.
+    private static bool BakeNearSphere(Vector3 cc, ShadowOcc m, float cs, float maxDist, Vector3 sun)
     {
         float dx = m.WC.X - cc.X, dy = m.WC.Y - cc.Y, dz = m.WC.Z - cc.Z;
         float r = maxDist + cs + m.WR;
         if (dx * dx + dy * dy + dz * dz > r * r) return false;
         return dx * sun.X + dy * sun.Y + dz * sun.Z >= -m.WR - cs;
+    }
+
+    //Can the rays that start inside this chunk ever reach this placement's own box? They run maxDist
+    //along the sun from the chunk's footprint at its own ground, hy0 to hy1, so they sweep that
+    //footprint pushed by the segment they trace - per axis, by how far the sun goes along it. This
+    //box replaces the sphere test above for everything the baker builds now, and the difference is
+    //large near a city: a block of buildings is culled by a sphere as large as the block, which
+    //accepted nearly every chunk and left every ray of the bake to be moved into the model's space
+    //and walked over the same building again. dev is how far a soft pass can swing a ray sideways.
+    private static bool BakeNear(Vector3 cc, float hy0, float hy1, float cs, float maxDist,
+                                 Vector3 sun, float dev, ShadowOcc m)
+    {
+        var wb = m.WB;
+        if (wb.Length < 6) return BakeNearSphere(cc, m, cs, maxDist, sun);
+        float reachX = maxDist * (MathF.Abs(sun.X) + dev);
+        float reachY = maxDist * (MathF.Abs(sun.Y) + dev);
+        float reachZ = maxDist * (MathF.Abs(sun.Z) + dev);
+        float x0 = cc.X - cs, x1 = cc.X + cs;
+        float z0 = cc.Z - cs, z1 = cc.Z + cs;
+        if (wb[3] < x0 - (sun.X < 0f ? reachX : 0f) || wb[0] > x1 + (sun.X > 0f ? reachX : 0f)) return false;
+        if (wb[4] < hy0 - (sun.Y < 0f ? reachY : 0f) || wb[1] > hy1 + (sun.Y > 0f ? reachY : 0f)) return false;
+        if (wb[5] < z0 - (sun.Z < 0f ? reachZ : 0f) || wb[2] > z1 + (sun.Z > 0f ? reachZ : 0f)) return false;
+        return true;
+    }
+
+    //The lowest and highest ground a tile's heightmaps give: the rays of a bake start on the ground
+    //of the tile their texel sits in, so this is the span they sweep vertically. Every chunk of the
+    //tile is walked because a texel on a chunk border is read over the seam, where the neighbouring
+    //chunk's own height vertices take part and can be far off a cliff. A tile with no readable height
+    //gets a span wide enough that nothing is rejected because of it.
+    private (float, float) GroundSpan(AdtFile adt)
+    {
+        float mn = float.MaxValue, mx = float.MinValue;
+        for (int cy = 0; cy < AdtFile.ChunksPerSide; cy++)
+            for (int cx = 0; cx < AdtFile.ChunksPerSide; cx++)
+            {
+                var ch = adt.Chunks[cy, cx];
+                if (ch == null) continue;
+                float zBase = ch.Position.Z;
+                foreach (var h in ch.Heights)
+                {
+                    if (!float.IsFinite(h)) continue;
+                    var at = zBase + h;
+                    if (at < mn) mn = at;
+                    if (at > mx) mx = at;
+                }
+            }
+        if (!(mn <= mx)) { mn = 0f; mx = 0f; }
+        //The margin is the ray's own lift plus the texels that lean over the tile's own edge.
+        return (mn - 1f, mx + 1f);
     }
 
     private static Vector3 JitterBake(Vector3 dir, int seed, float dist, float baseJitter)
@@ -912,6 +1240,87 @@ public sealed partial class GlViewport
         return solid * 100 >= samples * 3;
     }
 
+    //TEMPORARY, one bake per session: does the cell walk agree with walking every triangle? A ray is
+    //aimed at one of the geometry's own triangles from a point outside its box, in both directions,
+    //so the ray has to cross the box slab, the cells and, for the triangles the grid could not hold,
+    //the aside list. The very same ray is then run against a copy of that placement whose triangles
+    //are simply walked. Both must call the ray occluding or not, since only that verdict is what the
+    //bake reads. A ray the plain walk cannot make hit either is not a test at all, so it is left out
+    //until enough of the ones that do hit have been tried. 0 = nothing testable, 1 = agreed,
+    //2 = disagreed.
+    private bool ShadowGridCheck = true;
+    private int CheckShadowGrids(List<ShadowOcc> w, List<ShadowOcc> m, ShadowOpt opt, float maxDist)
+    {
+        var seed = 0x2545F491u;
+        double Rnd()
+        {
+            seed = seed * 1664525u + 1013904223u;
+            return (seed >> 8) * (1d / 16777216d);
+        }
+
+        var tried = 0;
+        var mismatch = 0;
+        foreach (var lst in new[] { w, m })
+            foreach (var occ in lst)
+            {
+                if (occ.Grid == null || occ.Idx.Length < 9) continue;
+                //The placement walked twice: once with its grid, once with none.
+                var plain = new ShadowOcc { W = occ.W, WC = occ.WC, WR = occ.WR, Scale = occ.Scale,
+                                            Inv = occ.Inv, V = occ.V, Idx = occ.Idx, Stride = occ.Stride,
+                                            Ranges = occ.Ranges, BBox = occ.BBox, WB = occ.WB, LB = occ.LB };
+                var toWorld = occ.Inv.Inverted();
+                var lb = occ.LB;
+                float diag = lb.Length >= 6 ? new Vector3(lb[3] - lb[0], lb[4] - lb[1], lb[5] - lb[2]).Length : 1f;
+                float scale = Math.Abs(occ.Scale) < 1e-4f ? 1f : Math.Abs(occ.Scale);
+                //Far enough out that the box slab matters, never past the reach a bake would give.
+                float spread = Math.Max(1f, diag) * 0.5f + maxDist / scale * 0.45f;
+                var v = occ.V;
+                var idx = occ.Idx;
+                int stride = occ.Stride;
+                int nTri = idx.Length / 3;
+
+                for (int k = 0; k < 8; k++)
+                {
+                    var ii = ((int)(Rnd() * nTri) % nTri) * 3;
+                    if (ii + 2 >= idx.Length) continue;
+                    int o0 = (int)idx[ii] * stride, o1 = (int)idx[ii + 1] * stride, o2 = (int)idx[ii + 2] * stride;
+                    if (o2 + 2 >= v.Length) continue;
+                    //The triangle's own centre, and a start point on a random side of it.
+                    var at = new Vector3((v[o0] + v[o1] + v[o2]) / 3f,
+                                         (v[o0 + 1] + v[o1 + 1] + v[o2 + 1]) / 3f,
+                                         (v[o0 + 2] + v[o1 + 2] + v[o2 + 2]) / 3f);
+                    var off = new Vector3((float)(Rnd() * 2d - 1d), (float)(Rnd() * 2d - 1d), (float)(Rnd() * 2d - 1d));
+                    if (off.Length < 1e-3f) off = new Vector3(1f, 0f, 0f);
+                    off = Vector3.Normalize(off) * spread;
+                    if (k >= 4) off = -off;
+                    var from = at - off;
+                    var dir = at - from;
+                    if (dir.Length < 1e-4f) continue;
+                    dir = Vector3.Normalize(dir);
+
+                    var origin = Vector3.TransformPosition(from, toWorld);
+                    var sun = Vector3.Normalize(Vector3.TransformVector(dir, toWorld));
+                    //The world point has to come back to the local one it was built from, or the ray
+                    //below would be aimed at nothing and the check would test nothing.
+                    var back = Vector3.TransformPosition(origin, occ.Inv);
+                    if (new Vector3(back.X - from.X, back.Y - from.Y, back.Z - from.Z).Length > 0.02f * (1f + Math.Abs(from.Length))) continue;
+                    float dPlain, dGrid;
+                    var hitPlain = RayOccludes(opt, plain, origin, sun, maxDist, true, out dPlain);
+                    var hitGrid = RayOccludes(opt, occ, origin, sun, maxDist, true, out dGrid);
+                    //A ray that only grazes the end of its reach is not a fair test either.
+                    if (hitPlain && dPlain > maxDist * 0.9f) continue;
+                    if (hitGrid && dGrid > maxDist * 0.9f) continue;
+                    if (hitPlain || hitGrid)
+                    {
+                        tried++;
+                        if (hitPlain != hitGrid) mismatch++;
+                    }
+                    if (tried >= 4000 || mismatch > 0) return mismatch > 0 ? 2 : 1;
+                }
+            }
+        return tried >= 50 ? 1 : 0;
+    }
+
     private bool SunRayOccluded(ShadowOpt opt, Vector3 origin, Vector3 dir, float maxDist,
                                  List<ShadowOcc> w, List<ShadowOcc> m, bool wmoOnly, bool alphaTest, out float dist)
     {
@@ -927,6 +1336,96 @@ public sealed partial class GlViewport
         return false;
     }
 
+    //One triangle of an occluder against a ray that was already brought into the occluder's own
+    //space. Both walks below call this, so a bake that buckets the triangles into cells and one that
+    //simply walks them decide exactly the same thing about every triangle they look at.
+    private static bool TriOccludes(TriRange rg, ShadowOcc occ, int tri,
+                                    float lox, float loy, float loz, float ldx, float ldy, float ldz,
+                                    float maxLocal, bool alphaTest, int threshold, out float t)
+    {
+        t = 0f;
+        var v = occ.V;
+        var idx = occ.Idx;
+        var bb = occ.BBox;
+        var stride = occ.Stride;
+        var nTri = idx.Length / 3;
+
+        //The triangle's own box, as a slab of the ray: most of the triangles a ray is close to are
+        //thrown away here, on six comparisons.
+        var b = tri * 6;
+        if (bb != null && tri < nTri && b + 5 < bb.Length)
+        {
+            float t0 = 0f, t1 = maxLocal;
+            for (int ax = 0; ax < 3; ax++)
+            {
+                float od = ax == 0 ? lox : ax == 1 ? loy : loz;
+                float dd = ax == 0 ? ldx : ax == 1 ? ldy : ldz;
+                float blo = bb[b + ax], bhi = bb[b + 3 + ax];
+                if (MathF.Abs(dd) < 1e-6f) { if (od < blo || od > bhi) return false; continue; }
+                float ta = (blo - od) / dd, tb = (bhi - od) / dd;
+                if (ta > tb) (ta, tb) = (tb, ta);
+                if (ta > t0) t0 = ta;
+                if (tb < t1) t1 = tb;
+                if (t0 > t1) return false;
+            }
+        }
+
+        var ii = tri * 3;
+        if (ii + 2 >= idx.Length) return false;
+        uint i0 = idx[ii], i1 = idx[ii + 1], i2 = idx[ii + 2];
+        int o0 = (int)i0 * stride, o1 = (int)i1 * stride, o2 = (int)i2 * stride;
+        if (o2 + 7 >= v.Length) return false;
+
+        float axx = v[o0], ayy = v[o0 + 1], azz = v[o0 + 2];
+        float e1x = v[o1] - axx, e1y = v[o1 + 1] - ayy, e1z = v[o1 + 2] - azz;
+        float e2x = v[o2] - axx, e2y = v[o2 + 1] - ayy, e2z = v[o2 + 2] - azz;
+        float px = ldy * e2z - ldz * e2y, py = ldz * e2x - ldx * e2z, pz = ldx * e2y - ldy * e2x;
+        float det = e1x * px + e1y * py + e1z * pz;
+        if (det > -1e-7f && det < 1e-7f) return false;
+        float invDet = 1f / det;
+
+        float sx = lox - axx, sy = loy - ayy, sz = loz - azz;
+        float u = (sx * px + sy * py + sz * pz) * invDet;
+        if (u < 0f || u > 1f) return false;
+        float qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
+        float vv = (ldx * qx + ldy * qy + ldz * qz) * invDet;
+        if (vv < 0f || u + vv > 1f) return false;
+        float tt = (e2x * qx + e2y * qy + e2z * qz) * invDet;
+        if (tt < 0.05f || tt > maxLocal) return false;
+
+        bool sampleAlpha = rg.Alpha && alphaTest;
+        var rgba = rg.Rgba;
+        int tw = rg.TW, th = rg.TH;
+        if (sampleAlpha && (rgba == null || rgba.Length < 4 || tw <= 0 || th <= 0)) sampleAlpha = false;
+        if (sampleAlpha && rgba != null)
+        {
+            float u0 = v[o0 + 6], u1 = v[o1 + 6], u2 = v[o2 + 6];
+            float w0 = v[o0 + 7], w1 = v[o1 + 7], w2 = v[o2 + 7];
+            if (u0 != 0f || u1 != 0f || u2 != 0f || w0 != 0f || w1 != 0f || w2 != 0f)
+            {
+                float bw = 1f - u - vv;
+                float hu = bw * u0 + u * u1 + vv * u2;
+                float hv = bw * w0 + u * w1 + vv * w2;
+                int tx = (int)((hu - MathF.Floor(hu)) * tw);
+                int ty = (int)((hv - MathF.Floor(hv)) * th);
+                if (tx < 0) tx = 0; else if (tx >= tw) tx = tw - 1;
+                if (ty < 0) ty = 0; else if (ty >= th) ty = th - 1;
+                int ai = (ty * tw + tx) * 4 + 3;
+                if (ai >= rgba.Length || rgba[ai] < threshold) return false;
+            }
+        }
+
+        t = tt;
+        return true;
+    }
+
+    //Does one sun ray of the bake hit this occluder at all? Three filters run before a single
+    //triangle is looked at, and they are ordered by how much each one costs: the model's sphere is
+    //the cheap reject for something far away, the box around its own triangles is what rejects the
+    //buildings a ray cannot reach at all - a whole block of a city is inside its own sphere almost
+    //anywhere near it, so the sphere alone leaves every ray of a bake in Ironforge to be moved into
+    //the model's space and walked over the same building - and then the ray only meets the triangles
+    //that sit in the cells it crosses, instead of every triangle of the model.
     private static bool RayOccludes(ShadowOpt opt, ShadowOcc occ, Vector3 origin, Vector3 dir, float maxDist,
                                      bool alphaTest, out float dist)
     {
@@ -937,91 +1436,115 @@ public sealed partial class GlViewport
         float cx = wx - dir.X * tClosest, cy = wy - dir.Y * tClosest, cz = wz - dir.Z * tClosest;
         if (cx * cx + cy * cy + cz * cz > occ.WR * occ.WR) return false;
 
+        float tNear = 0f, tFar = maxDist;
+        var wb = occ.WB;
+        if (wb.Length == 6)
+        {
+            for (int ax = 0; ax < 3; ax++)
+            {
+                float od = ax == 0 ? origin.X : ax == 1 ? origin.Y : origin.Z;
+                float dd = ax == 0 ? dir.X : ax == 1 ? dir.Y : dir.Z;
+                float blo = wb[ax], bhi = wb[3 + ax];
+                if (MathF.Abs(dd) < 1e-6f) { if (od < blo || od > bhi) return false; continue; }
+                float ta = (blo - od) / dd, tb = (bhi - od) / dd;
+                if (ta > tb) (ta, tb) = (tb, ta);
+                if (ta > tNear) tNear = ta;
+                if (tb < tFar) tFar = tb;
+                if (tNear > tFar) return false;
+            }
+        }
+
         var lo = Vector3.TransformPosition(origin, occ.Inv);
         var ld = Vector3.TransformVector(dir, occ.Inv);
         float lox = lo.X, loy = lo.Y, loz = lo.Z;
         float ldx = ld.X, ldy = ld.Y, ldz = ld.Z;
         float scale = occ.Scale <= 0f ? 1f : occ.Scale;
         float maxLocal = maxDist / scale;
-
-        var v = occ.V;
         var idx = occ.Idx;
-        var bb = occ.BBox;
-        int stride = occ.Stride, nTri = idx.Length / 3;
+        var threshold = opt.AlphaThreshold;
+        float hit;
+
+        var g = occ.Grid;
+        if (g != null)
+        {
+            //the few triangles the grid could not hold, which are tested whatever the ray
+            for (int k = 0; k < g.Wide.Length; k++)
+            {
+                int tri = g.Wide[k], rg = g.RangeOf[tri];
+                if (rg < 0) continue;
+                var wr = occ.Ranges[rg];
+                if (opt.SkipTransparent && !wr.Blocks) continue;
+                if (TriOccludes(wr, occ, tri, lox, loy, loz, ldx, ldy, ldz, maxLocal, alphaTest, threshold, out hit))
+                { dist = hit * scale; return true; }
+            }
+
+            //the cells the ray crosses between here and the far end of its reach
+            float gx0 = g.MinX, gy0 = g.MinY, gz0 = g.MinZ;
+            float gx1 = gx0 + g.DX * g.Cell, gy1 = gy0 + g.DY * g.Cell, gz1 = gz0 + g.DZ * g.Cell;
+            bool miss = false;
+            float a0 = 0f, a1 = maxLocal;
+            for (int ax = 0; ax < 3 && !miss; ax++)
+            {
+                float od = ax == 0 ? lox : ax == 1 ? loy : loz;
+                float dd = ax == 0 ? ldx : ax == 1 ? ldy : ldz;
+                float blo = ax == 0 ? gx0 : ax == 1 ? gy0 : gz0;
+                float bhi = ax == 0 ? gx1 : ax == 1 ? gy1 : gz1;
+                if (MathF.Abs(dd) < 1e-6f) { if (od < blo || od > bhi) miss = true; continue; }
+                float ta = (blo - od) / dd, tb = (bhi - od) / dd;
+                if (ta > tb) (ta, tb) = (tb, ta);
+                if (ta > a0) a0 = ta;
+                if (tb < a1) a1 = tb;
+                if (a0 > a1) miss = true;
+            }
+            if (!miss)
+            {
+                var cell = g.Cell;
+                //the cell holding the ray's entry point, and the parameter of the next cell wall of
+                //each axis behind it: the walk always steps through the wall that comes first
+                int cxw = Math.Clamp((int)Math.Floor((lox + ldx * a0 - gx0) / cell), 0, g.DX - 1);
+                int cyw = Math.Clamp((int)Math.Floor((loy + ldy * a0 - gy0) / cell), 0, g.DY - 1);
+                int czw = Math.Clamp((int)Math.Floor((loz + ldz * a0 - gz0) / cell), 0, g.DZ - 1);
+                var ddx = MathF.Abs(ldx) < 1e-6f ? float.MaxValue : cell / MathF.Abs(ldx);
+                var ddy = MathF.Abs(ldy) < 1e-6f ? float.MaxValue : cell / MathF.Abs(ldy);
+                var ddz = MathF.Abs(ldz) < 1e-6f ? float.MaxValue : cell / MathF.Abs(ldz);
+                var edge = ldx > 0f ? gx0 + (cxw + 1) * cell : gx0 + cxw * cell;
+                float mx = MathF.Abs(ldx) < 1e-6f ? float.MaxValue : (edge - lox) / ldx;
+                edge = ldy > 0f ? gy0 + (cyw + 1) * cell : gy0 + cyw * cell;
+                float my = MathF.Abs(ldy) < 1e-6f ? float.MaxValue : (edge - loy) / ldy;
+                edge = ldz > 0f ? gz0 + (czw + 1) * cell : gz0 + czw * cell;
+                float mz = MathF.Abs(ldz) < 1e-6f ? float.MaxValue : (edge - loz) / ldz;
+                int at = (czw * g.DY + cyw) * g.DX + cxw;
+                for (;;)
+                {
+                    for (int k = g.Start[at], end = g.Start[at + 1]; k < end; k++)
+                    {
+                        int tri = g.Tri[k], rg = g.RangeOf[tri];
+                        if (rg < 0) continue;
+                        var wr = occ.Ranges[rg];
+                        if (opt.SkipTransparent && !wr.Blocks) continue;
+                        if (TriOccludes(wr, occ, tri, lox, loy, loz, ldx, ldy, ldz, maxLocal, alphaTest, threshold, out hit))
+                        { dist = hit * scale; return true; }
+                    }
+                    //step across the nearest wall, and stop once the ray is out of its reach
+                    var axisWall = mx <= my && mx <= mz ? 0 : my <= mz ? 1 : 2;
+                    var stepAt = axisWall == 0 ? mx : axisWall == 1 ? my : mz;
+                    if (stepAt > a1) break;
+                    if (axisWall == 0) { cxw += ldx > 0f ? 1 : -1; mx += ddx; if (cxw < 0 || cxw >= g.DX) break; at = (czw * g.DY + cyw) * g.DX + cxw; }
+                    else if (axisWall == 1) { cyw += ldy > 0f ? 1 : -1; my += ddy; if (cyw < 0 || cyw >= g.DY) break; at = (czw * g.DY + cyw) * g.DX + cxw; }
+                    else { czw += ldz > 0f ? 1 : -1; mz += ddz; if (czw < 0 || czw >= g.DZ) break; at = (czw * g.DY + cyw) * g.DX + cxw; }
+                }
+            }
+            return false;
+        }
+
+        //no grid: the triangles of every range, in the order they are stored
         foreach (var rg in occ.Ranges)
         {
             if (opt.SkipTransparent && !rg.Blocks) continue;
-            bool sampleAlpha = rg.Alpha && alphaTest;
-            byte[] rgba = rg.Rgba ?? new byte[0];
-            int tw = rg.TW, th = rg.TH;
-            if (sampleAlpha && (rgba.Length < 4 || tw <= 0 || th <= 0)) sampleAlpha = false;
-
             int last = Math.Min(rg.Start + rg.Count, idx.Length);
-            for (int ii = rg.Start; ii + 2 < last; ii += 3)
-            {
-                int tri = ii / 3;
-                if (bb != null && tri < nTri)
-                {
-                    int b = tri * 6;
-                    float t0 = 0f, t1 = maxLocal;
-                    bool miss = false;
-                    for (int ax = 0; ax < 3 && !miss; ax++)
-                    {
-                        float od = ax == 0 ? lox : ax == 1 ? loy : loz;
-                        float dd = ax == 0 ? ldx : ax == 1 ? ldy : ldz;
-                        float blo = bb[b + ax], bhi = bb[b + 3 + ax];
-                        if (MathF.Abs(dd) < 1e-6f) { if (od < blo || od > bhi) miss = true; continue; }
-                        float ta = (blo - od) / dd, tb = (bhi - od) / dd;
-                        if (ta > tb) (ta, tb) = (tb, ta);
-                        if (ta > t0) t0 = ta;
-                        if (tb < t1) t1 = tb;
-                        if (t0 > t1) miss = true;
-                    }
-                    if (miss) continue;
-                }
-
-                uint i0 = idx[ii], i1 = idx[ii + 1], i2 = idx[ii + 2];
-                int o0 = (int)i0 * stride, o1 = (int)i1 * stride, o2 = (int)i2 * stride;
-                if (o2 + 7 >= v.Length) continue;
-
-                float axx = v[o0], ayy = v[o0 + 1], azz = v[o0 + 2];
-                float e1x = v[o1] - axx, e1y = v[o1 + 1] - ayy, e1z = v[o1 + 2] - azz;
-                float e2x = v[o2] - axx, e2y = v[o2 + 1] - ayy, e2z = v[o2 + 2] - azz;
-                float px = ldy * e2z - ldz * e2y, py = ldz * e2x - ldx * e2z, pz = ldx * e2y - ldy * e2x;
-                float det = e1x * px + e1y * py + e1z * pz;
-                if (det > -1e-7f && det < 1e-7f) continue;
-                float invDet = 1f / det;
-
-                float sx = lox - axx, sy = loy - ayy, sz = loz - azz;
-                float u = (sx * px + sy * py + sz * pz) * invDet;
-                if (u < 0f || u > 1f) continue;
-                float qx = sy * e1z - sz * e1y, qy = sz * e1x - sx * e1z, qz = sx * e1y - sy * e1x;
-                float vv = (ldx * qx + ldy * qy + ldz * qz) * invDet;
-                if (vv < 0f || u + vv > 1f) continue;
-                float t = (e2x * qx + e2y * qy + e2z * qz) * invDet;
-                if (t < 0.05f || t > maxLocal) continue;
-
-                if (sampleAlpha)
-                {
-                    float u0 = v[o0 + 6], u1 = v[o1 + 6], u2 = v[o2 + 6];
-                    float w0 = v[o0 + 7], w1 = v[o1 + 7], w2 = v[o2 + 7];
-                    if (u0 != 0f || u1 != 0f || u2 != 0f || w0 != 0f || w1 != 0f || w2 != 0f)
-                    {
-                        float bw = 1f - u - vv;
-                        float hu = bw * u0 + u * u1 + vv * u2;
-                        float hv = bw * w0 + u * w1 + vv * w2;
-                        int tx = (int)((hu - MathF.Floor(hu)) * tw);
-                        int ty = (int)((hv - MathF.Floor(hv)) * th);
-                        if (tx < 0) tx = 0; else if (tx >= tw) tx = tw - 1;
-                        if (ty < 0) ty = 0; else if (ty >= th) ty = th - 1;
-                        int ai = (ty * tw + tx) * 4 + 3;
-                        if (ai >= rgba.Length || rgba[ai] < opt.AlphaThreshold) continue;
-                    }
-                }
-
-                dist = t * scale;
-                return true;
-            }
+            for (int tri = Math.Max(0, rg.Start) / 3, lastTri = last / 3; tri < lastTri; tri++)
+                if (TriOccludes(rg, occ, tri, lox, loy, loz, ldx, ldy, ldz, maxLocal, alphaTest, threshold, out hit))
+                { dist = hit * scale; return true; }
         }
         return false;
     }

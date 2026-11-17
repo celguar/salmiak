@@ -108,8 +108,38 @@ public sealed class DoodadRenderer : IDisposable
         public int DefaultSequence = -1;
     }
 
-    //CPU-side geometry for the shadow baker (kept separate from the render cache so BLPs can be freed).
+    //CPU-side geometry for the shadow baker (kept separate from the render cache so BLPs can be
+    //freed). It stays between bakes on purpose: gathering the models of a stretch of Ironforge the
+    //second time would otherwise decompress and parse every M2 there again, and decode every BLP it
+    //wears again, which is most of what a "Preparing models" step costs. Both sides are bounded, and
+    //past the budget the whole side is dropped rather than one model at a time.
     private readonly Dictionary<string, CpuModel?> _cpuModels = new(StringComparer.OrdinalIgnoreCase);
+    private long _cpuModelFloats;
+    //Decoded BLP pixels shared between those copies: bark and leaves are reused by dozens of models
+    //and a single 256x256 unit is a megabyte, so a copy per model would be the bulk of that cache.
+    private readonly Dictionary<string, (byte[] Rgba, int W, int H)> _cpuTex = new(StringComparer.OrdinalIgnoreCase);
+    private long _cpuTexBytes;
+    private const long CpuModelBudget = 16L << 20;
+    private const long CpuTexBudget = 48L << 20;
+
+    // A BLP decoded for the rays, kept until the pixel budget is over. A texture that could not be
+    // read is kept empty as well, so the same broken path is not opened again every bake.
+    private (byte[] Rgba, int W, int H) CpuTexture(string texPath)
+    {
+        if (_cpuTex.TryGetValue(texPath, out var hit)) return hit;
+        var dec = (new byte[0], 0, 0);
+        try
+        {
+            using var ts = _mpq.OpenFile(texPath.Replace('/', '\\'));
+            dec = BlpReader.Decode(ts);
+        }
+        catch { }
+        var (rgba, w, h) = dec;
+        if (_cpuTexBytes + rgba.Length > CpuTexBudget) { _cpuTex.Clear(); _cpuTexBytes = 0; }
+        _cpuTex[texPath] = dec;
+        _cpuTexBytes += rgba.Length;
+        return dec;
+    }
 
     public CpuModel? GetCpuGeometry(string m2Path)
     {
@@ -120,11 +150,18 @@ public sealed class DoodadRenderer : IDisposable
         // The baker only needs geometry, so this build skips the skinning attributes and the pose.
         try { built = BuildCpuModel(key, null, false); }
         catch (Exception) { built = null; }
+        long floats = built == null ? 0 : built.Vertices.Length + (long)built.Indices.Length;
+        if (_cpuModelFloats + floats > CpuModelBudget) { _cpuModels.Clear(); _cpuModelFloats = 0; }
         _cpuModels[key] = built;
+        _cpuModelFloats += floats;
         return built;
     }
 
-    public void ClearCpuGeometry() => _cpuModels.Clear();
+    public void ClearCpuGeometry()
+    {
+        _cpuModels.Clear();
+        _cpuModelFloats = 0;
+    }
 
     public sealed class NpcLook
     {
@@ -403,10 +440,7 @@ public sealed class DoodadRenderer : IDisposable
                 subs.Add((sm.IndexStart, sm.IndexCount, tex));
                 uvAnims.Add(sm.UvAnim);
                 if (tex.Length > 0 && !cm.Textures.ContainsKey(tex))
-                {
-                    try { using var ts = _mpq.OpenFile(tex.Replace('/', '\\')); var (rgba, w, h) = BlpReader.Decode(ts); cm.Textures[tex] = (rgba, w, h); }
-                    catch { }
-                }
+                    cm.Textures[tex] = CpuTexture(tex);
             }
             cm.Submeshes = subs.ToArray();
             cm.UvAnims = uvAnims.ToArray();
@@ -1407,6 +1441,10 @@ public sealed class DoodadRenderer : IDisposable
                 if (m.SkinVbo != 0) GL.DeleteBuffer(m.SkinVbo);
             }
         _models.Clear();
+        _cpuModels.Clear();
+        _cpuTex.Clear();
+        _cpuModelFloats = 0;
+        _cpuTexBytes = 0;
         _instances.Clear();
         if (_shader != 0) GL.DeleteProgram(_shader);
         if (_idShader != 0) GL.DeleteProgram(_idShader);

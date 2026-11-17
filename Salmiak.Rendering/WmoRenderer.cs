@@ -152,6 +152,15 @@ public sealed class WmoRenderer : IDisposable
             foreach (var g in m.Groups)
             { GL.DeleteVertexArray(g.Vao); GL.DeleteBuffer(g.Vbo); GL.DeleteBuffer(g.Ebo); }
         _models.Remove(rootPath);
+        //The CPU copy the rays read belongs to the same model, so it goes with it: keeping the
+        //geometry of an object that was taken out of the world would leave a bake able to cast its
+        //shadow again.
+        if (_cpuGroups.TryGetValue(rootPath, out var cpu))
+        {
+            _cpuGroups.Remove(rootPath);
+            _cpuFloats -= cpu.Floats;
+            if (_cpuFloats < 0) _cpuFloats = 0;
+        }
     }
 
     private GpuWmo? GetWmo(string rootPath)
@@ -159,6 +168,7 @@ public sealed class WmoRenderer : IDisposable
         if (_models.TryGetValue(rootPath, out var cached)) return cached;
 
         GpuWmo? wmo = null;
+        var cpuGroups = new List<WmoFile.Group>();
         try
         {
             WmoFile.Root root;
@@ -176,6 +186,7 @@ public sealed class WmoRenderer : IDisposable
                 using var gs = _mpq.OpenFile(groupPath);
                 var grp = WmoFile.ParseGroup(gs, root);
                 if (grp == null) continue;
+                cpuGroups.Add(grp);
                 int n = grp.Vertices.Length / WmoFile.GroupVertexStride;
                 for (int v = 0; v < n; v++)
                 {
@@ -199,16 +210,50 @@ public sealed class WmoRenderer : IDisposable
         catch { wmo = null; }
 
         _models[rootPath] = wmo;
+        //The group files were just read and decompressed here for the upload: hand their triangles
+        //to the CPU side as well, which is what the shadow baker reuses instead of parsing every
+        //one of them again. A root that could not be read keeps an empty entry, so neither the
+        //renderer nor a later bake tries it again.
+        if (wmo == null) cpuGroups.Clear();
+        HoldCpu(rootPath, cpuGroups);
         return wmo;
     }
 
-    //CPU-side group triangles for the shadow baker (parsed without touching GL).
-    private readonly Dictionary<string, List<WmoFile.Group>> _cpuGroups = new(StringComparer.OrdinalIgnoreCase);
+    //CPU-side group triangles for the shadow baker (parsed without touching GL). A root that was
+    //already drawn gets these straight out of GetWmo: the group files behind a whole city of
+    //buildings - Ironforge, Orgrimmar - were decompressed and parsed once for the upload already,
+    //and parsing them a second time for the rays is what made a bake near such a neighbourhood
+    //spend tens of seconds getting ready. The copies stay between bakes, so re-baking a stretch
+    //costs no parse at all, and the cache is bounded: past its budget everything held is dropped
+    //and whatever a later bake wants is read again.
+    private sealed class CpuWmo
+    {
+        public List<WmoFile.Group> Groups = new();
+        public long Floats;
+    }
+    private readonly Dictionary<string, CpuWmo> _cpuGroups = new(StringComparer.OrdinalIgnoreCase);
+    private long _cpuFloats;
+    //Vertex and index floats held for the rays, about 100 MB.
+    private const long CpuFloatBudget = 24L << 20;
+    //Decoded BLP pixels shared with the upload, about 48 MB.
+    private readonly Dictionary<string, (byte[] Rgba, int W, int H)> _cpuTex = new(StringComparer.OrdinalIgnoreCase);
+    private long _cpuTexBytes;
+    private const long CpuTexBudget = 48L << 20;
+
+    private void HoldCpu(string rootPath, List<WmoFile.Group> groups)
+    {
+        long floats = 0;
+        foreach (var g in groups) floats += g.Vertices.Length + (long)g.Indices.Length;
+        if (_cpuFloats + floats > CpuFloatBudget) { _cpuGroups.Clear(); _cpuFloats = 0; }
+        if (_cpuGroups.TryGetValue(rootPath, out var old)) _cpuFloats -= old.Floats;
+        _cpuGroups[rootPath] = new CpuWmo { Groups = groups, Floats = floats };
+        _cpuFloats += floats;
+    }
 
     public List<WmoFile.Group> GetCpuGroups(string rootPath)
     {
         if (rootPath == null || rootPath.Length == 0) return [];
-        if (_cpuGroups.TryGetValue(rootPath, out var hit)) return hit;
+        if (_cpuGroups.TryGetValue(rootPath, out var hit)) return hit.Groups;
         var found = new List<WmoFile.Group>();
         try
         {
@@ -227,11 +272,41 @@ public sealed class WmoRenderer : IDisposable
             }
         }
         catch { found.Clear(); }
-        _cpuGroups[rootPath] = found;
+        //A root that could not be read is stored empty as well, so a later bake does not open it
+        //again either.
+        HoldCpu(rootPath, found);
         return found;
     }
 
-    public void ClearCpuGeometry() => _cpuGroups.Clear();
+    public void ClearCpuGeometry()
+    {
+        _cpuGroups.Clear();
+        _cpuFloats = 0;
+        _cpuTex.Clear();
+        _cpuTexBytes = 0;
+    }
+
+    //A BLP decoded for the rays, kept until the pixel budget is over. The upload reads it through
+    //the same door, so a WMO that is drawn as well as baked pays for its bark and leaves once, and
+    //a later bake of the same stretch pays not at all. A texture that could not be read is kept
+    //empty as well, so the same broken path is not opened again every bake.
+    public (byte[] Rgba, int W, int H) CpuTexture(string texPath)
+    {
+        texPath = texPath.Replace('/', '\\');
+        if (_cpuTex.TryGetValue(texPath, out var hit)) return hit;
+        var dec = (new byte[0], 0, 0);
+        try
+        {
+            using var ts = _mpq.OpenFile(texPath);
+            dec = BlpReader.Decode(ts);
+        }
+        catch { }
+        var (rgba, w, h) = dec;
+        if (_cpuTexBytes + rgba.Length > CpuTexBudget) { _cpuTex.Clear(); _cpuTexBytes = 0; }
+        _cpuTex[texPath] = dec;
+        _cpuTexBytes += rgba.Length;
+        return dec;
+    }
 
     private GpuGroup Upload(WmoFile.Group grp)
     {
@@ -264,7 +339,15 @@ public sealed class WmoRenderer : IDisposable
         for (int i = 0; i < grp.Batches.Count; i++)
         {
             var b = grp.Batches[i];
-            int texId = !string.IsNullOrEmpty(b.TexturePath) && _tex != null ? _tex.Get(b.TexturePath) : 0;
+            int texId = 0;
+            if (!string.IsNullOrEmpty(b.TexturePath) && _tex != null)
+            {
+                //The pixels come from the CPU cache the rays read as well, so a WMO that is both
+                //drawn and baked is decoded once, not twice. A texture that could not be read goes
+                //the way it always did, through the cache's own read and fallback.
+                var (trgb, tw, th) = CpuTexture(b.TexturePath);
+                texId = tw > 0 ? _tex.GetOrUploadDecoded(b.TexturePath, trgb, tw, th) : _tex.Get(b.TexturePath);
+            }
             batches[i] = (b.IndexStart, b.IndexCount, texId, b.AlphaTest);
         }
         g.Batches = batches;
@@ -647,6 +730,10 @@ public sealed class WmoRenderer : IDisposable
                 foreach (var g in m.Groups)
                 { GL.DeleteVertexArray(g.Vao); GL.DeleteBuffer(g.Vbo); GL.DeleteBuffer(g.Ebo); }
         _models.Clear();
+        _cpuGroups.Clear();
+        _cpuFloats = 0;
+        _cpuTex.Clear();
+        _cpuTexBytes = 0;
         _instances.Clear();
         if (_shader != 0) GL.DeleteProgram(_shader);
         if (_idShader != 0) GL.DeleteProgram(_idShader);
