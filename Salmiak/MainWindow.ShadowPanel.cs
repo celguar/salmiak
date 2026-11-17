@@ -14,7 +14,7 @@ public partial class MainWindow
 {
     //Shadow sidebar: replaces the map panel while the Shadows tool is active, exactly like the
     //asset drawer does for Doodads / WMOs / Textures. The mode radio (brush vs raycast bake)
-    //sits on top, then the bake options, then the Bake button, with a progress bar above all.
+    //sits on top, then the bake options, then the Bake button with its progress bar below it.
     private System.Windows.Controls.CheckBox? _shadowBrushRow, _shadowRayRow;
     private System.Windows.Controls.Button? _shadowBakeButton;
     private System.Windows.Controls.TextBlock? _shadowProgressText, _shadowHint;
@@ -31,6 +31,11 @@ public partial class MainWindow
         new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x2e, 0x6c, 0xc4));
     private static readonly System.Windows.Media.Brush ShadowTrack =
         new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x36, 0x36, 0x3c));
+    //A bake that landed is shown in green, but kept away from the pure (0,255,0) the theme uses
+    //everywhere else: a full bar of acid green would read as a highlight rather than as a done
+    //state, and it fights the blue of every other control on this sidebar.
+    private static readonly System.Windows.Media.Brush ShadowDone =
+        new System.Windows.Media.SolidColorBrush(System.Windows.Media.Color.FromRgb(0x4e, 0x8b, 0x57));
 
     private void BuildShadowPanel()
     {
@@ -105,23 +110,6 @@ public partial class MainWindow
             return cb;
         }
 
-        //Progress comes first: it is the thing the user watches when many chunks are baked.
-        _shadowProgressText = new System.Windows.Controls.TextBlock
-        { Text = "", Foreground = System.Windows.Media.Brushes.LightGray, FontSize = 10 };
-        _shadowFill = new System.Windows.Controls.Border
-        {
-            Width = 0, Height = 8, Background = ShadowAccent,
-            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
-        };
-        var bar = new System.Windows.Controls.Border
-        {
-            Width = ShadowBarWidth, Height = 8, Background = ShadowTrack,
-            CornerRadius = new CornerRadius(3), Child = _shadowFill,
-            Margin = new Thickness(0, 2, 0, 6),
-        };
-        col.Children.Add(_shadowProgressText);
-        col.Children.Add(bar);
-
         Section("Mode");
         _shadowBrushRow = MakeRadio("Brush - paint shadows", true);
         _shadowRayRow = MakeRadio("Raycast - bake chunks", false);
@@ -160,6 +148,25 @@ public partial class MainWindow
         };
         _shadowBakeButton.Click += (_, _) => BakeShadowNow();
         col.Children.Add(_shadowBakeButton);
+
+        //Progress goes directly under the Bake button, so the thing that fills up sits at the place
+        //that started it. The counter line is the one that stays readable while the bake walks the
+        //chunks a few at a time between frames.
+        _shadowProgressText = new System.Windows.Controls.TextBlock
+        { Text = "", Foreground = System.Windows.Media.Brushes.LightGray, FontSize = 10 };
+        _shadowFill = new System.Windows.Controls.Border
+        {
+            Width = 0, Height = 8, Background = ShadowAccent,
+            HorizontalAlignment = System.Windows.HorizontalAlignment.Left,
+        };
+        var bar = new System.Windows.Controls.Border
+        {
+            Width = ShadowBarWidth, Height = 8, Background = ShadowTrack,
+            CornerRadius = new CornerRadius(3), Child = _shadowFill,
+            Margin = new Thickness(0, 4, 0, 6),
+        };
+        col.Children.Add(_shadowProgressText);
+        col.Children.Add(bar);
 
         _shadowHint = new System.Windows.Controls.TextBlock
         {
@@ -275,6 +282,20 @@ public partial class MainWindow
         if (_shadowRayRow != null) _shadowRayRow.IsChecked = _viewport.BakeChunksMode;
     }
 
+    //Empties the bar and puts it back in the sidebar's blue. Called straight from the click, before
+    //the bake is even prepared: PrepareShadowBake only fires the viewport's own reset once the CPU
+    //geometry copies are gathered, so without this a short bake would leave the previous bake's
+    //green fill on screen for the whole preparation and the user could not tell a new one started.
+    private void ResetShadowBar()
+    {
+        if (_shadowFill != null)
+        {
+            _shadowFill.Width = 0;
+            _shadowFill.Background = ShadowAccent;
+        }
+        if (_shadowProgressText != null) _shadowProgressText.Text = "Baking shadows...";
+    }
+
     //Swap the sidebar in/out; the asset drawer and the map panel own the same slot.
     private void UpdateShadowPanel()
     {
@@ -306,11 +327,15 @@ public partial class MainWindow
         int chunks = _viewport.BakedChunkCount;
         bool selected = chunks > 0;
         var scope = selected ? GlViewport.BakeScope.SelectedChunks : GlViewport.BakeScope.EditedTiles;
+        //The bar goes empty and blue before anything else happens, so the click reads as a new bake
+        //even when the rays finish too fast to watch: the green that is still on screen from the
+        //previous bake would otherwise sit there through the whole preparation step.
+        ResetShadowBar();
         //No blocking call here: the viewport render loop walks the bake a few chunks per frame, so
-        //the window stays alive and the bar above fills up while the rays run.
+        //the window stays alive and the bar under the button fills up while the rays run.
         if (!_viewport.StartShadowBake(scope)) return;
-        Say(selected ? $"Ray-baking {chunks} chunk(s) - watch the bar."
-            : "Ray-baking the edited tiles - watch the bar.");
+        Say(selected ? $"Ray-baking {chunks} chunk(s) - watch the bar under the button."
+            : "Ray-baking the edited tiles - watch the bar under the button.");
         if (_shadowHint != null) _shadowHint.Text = "Baking, one chunk per slice - Ctrl+Z undoes when the bar is full.";
         //The chunk list is deliberately kept so the sun can be retuned and the same chunks rebaked.
     }

@@ -77,16 +77,26 @@ public partial class MainWindow : Window
 
         //Shadow sidebar progress: BeginInvoke, because a bake runs on the viewport thread and must
         //not block on the window's dispatcher while it waits for its chunk workers.
-        _viewport.ShadowBakeProgressReset += () => Dispatcher.BeginInvoke(() =>
+        _viewport.ShadowBakeProgressReset += () => Dispatcher.BeginInvoke(ResetShadowBar);
+        //The gather costs up to a second and owns no chunk, so it gets its own label: an emptied bar
+        //reading "Preparing models" cannot be mistaken for a bake that just finished green.
+        _viewport.ShadowBakePreparing += () => Dispatcher.BeginInvoke(() =>
         {
-            if (_shadowFill != null) _shadowFill.Width = 0;
-            if (_shadowProgressText != null) _shadowProgressText.Text = "Baking shadows...";
+            if (_shadowProgressText != null) _shadowProgressText.Text = "Preparing models...";
         });
         _viewport.ShadowBakeProgress += (done, total) => Dispatcher.BeginInvoke(() =>
         {
             if (total <= 0) return;
-            if (_shadowFill != null) _shadowFill.Width = Math.Clamp(done * ShadowBarWidth / total, 0d, ShadowBarWidth);
-            if (_shadowProgressText != null) _shadowProgressText.Text = $"{done}/{total} chunks";
+            if (_shadowFill != null)
+            {
+                _shadowFill.Width = Math.Clamp(done * ShadowBarWidth / total, 0d, ShadowBarWidth);
+                //The last event of a bake always lands with done == total, so the bar turning green
+                //is the bake being over, and nothing else repaints it afterwards.
+                _shadowFill.Background = done >= total ? ShadowDone : ShadowAccent;
+            }
+            if (_shadowProgressText != null) _shadowProgressText.Text = done >= total
+                ? $"Baked {done} of {total} chunks"
+                : $"{done}/{total} chunks";
         });
 
         BuildToolbar();

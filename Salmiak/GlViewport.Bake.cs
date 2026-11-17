@@ -49,6 +49,10 @@ public sealed partial class GlViewport
     //Bake progress: fired once per chunk handled, so the shadow sidebar can track it.
     public event Action<int, int>? ShadowBakeProgress;
     public event Action? ShadowBakeProgressReset;
+    //Fired while the bake's models are still being gathered, which is the one part of a bake that
+    //costs a lot but owns no chunk yet: the sidebar labels it "Preparing models" so an emptied bar
+    //is never mistaken for a finished one.
+    public event Action? ShadowBakePreparing;
 
     //Picks every chunk of the tile under the cursor, or of every loaded tile when allTiles.
     public bool SelectAllBakeChunks(bool allTiles)

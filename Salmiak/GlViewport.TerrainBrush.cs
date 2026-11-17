@@ -329,10 +329,19 @@ public sealed partial class GlViewport
 
     private BakeJob? _job;
 
+    //A bake that was only asked for: the click queues it, the render loop gathers on a later frame.
+    //Gathering is not cheap (CPU copies of every WMO group and M2 model that can reach the chunks,
+    //plus one triangle template and box list per geometry) and doing it inside the click spends the
+    //whole frame there, so an emptied bar would only be drawn once the rays had already started.
+    private BakeScope _queuedScope;
+    private bool _bakeQueued;
+    private bool _bakeQueuedIdleDrawn;
+
     //Blocking bake for the map menu, which has no viewport frames to drive the incremental one.
     public int BakeShadows(BakeScope scope)
     {
         if (_job != null) { Notify?.Invoke("Bake shadows: a bake is already running in the viewport, wait for its bar."); return 0; }
+        if (_bakeQueued) { Notify?.Invoke("Bake shadows: a bake is queued in the viewport and gathering its models - wait for its bar."); return 0; }
         if (!PrepareShadowBake(scope)) return 0;
         BakeChunks(-1);
         return FinishShadowBake();
@@ -343,9 +352,16 @@ public sealed partial class GlViewport
     public bool StartShadowBake(BakeScope scope)
     {
         if (_job != null) { Notify?.Invoke("Bake shadows: a bake is already running - wait until its bar is full."); return false; }
-        if (!PrepareShadowBake(scope)) return false;
-        if (_job is not { } j) return false;
-        Notify?.Invoke($"Ray-baking shadows over {j.Targets.Count} chunk(s) frame by frame - watch the bar, Ctrl+Z undoes when the bar is full.");
+        if (_bakeQueued) { Notify?.Invoke("Bake shadows: the models of the bake you started are still being gathered - wait for its bar."); return false; }
+        //Nothing heavy here on pain of the click never reading: the bar is emptied and labelled, the
+        //model gather happens in StepBakeFrame, and it gets its own frame, so the sidebar always
+        //shows an empty blue bar with "Preparing models" before any ray is traced.
+        _queuedScope = scope;
+        _bakeQueued = true;
+        _bakeQueuedIdleDrawn = false;
+        ShadowBakeProgressReset?.Invoke();
+        ShadowBakePreparing?.Invoke();
+        Notify?.Invoke("Ray-baking shadows frame by frame - watch the bar under the Bake button, it turns green when the bake lands; Ctrl+Z undoes it.");
         return true;
     }
 
@@ -754,6 +770,24 @@ public sealed partial class GlViewport
     //enormous slice. Sizing by milliseconds keeps the bar moving and the redraws cheap.
     private void StepBakeFrame()
     {
+        //A queued bake gets one frame of its own, with no rays and no gather in it: that frame is
+        //what draws the empty blue bar and the "Preparing models" label the click asked for, and the
+        //gather then costs the next frame while the sidebar still reads the same way.
+        if (_job == null && _bakeQueued)
+        {
+            if (!_bakeQueuedIdleDrawn)
+            {
+                _bakeQueuedIdleDrawn = true;
+                return;
+            }
+
+            var scope = _queuedScope;
+            _bakeQueued = false;
+            _bakeQueuedIdleDrawn = false;
+            PrepareShadowBake(scope);
+            return;
+        }
+
         if (_job is not { } j) return;
         //A bake is tied to the map its chunks came from, and a loaded map invalidates them.
         if (j.Map != _mapName)

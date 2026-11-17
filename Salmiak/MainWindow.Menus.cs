@@ -105,6 +105,9 @@ public partial class MainWindow
         };
 
         Say("Baking shadows...");
+        //Same bar rule as the sidebar's own button: it empties and turns blue the moment a bake is
+        //asked for, and the progress events the bake fires put it back full and green when it lands.
+        ResetShadowBar();
         int n = _viewport.BakeShadows(chosen);
         //Keep the chunk selection when it was the scope so the sun can be retuned and the same
         //chunks baked again; otherwise drop it so a stale selection cannot affect later bakes.
