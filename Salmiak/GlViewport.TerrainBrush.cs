@@ -1066,9 +1066,14 @@ public sealed partial class GlViewport
             if (bb[b] < minX) minX = bb[b];
             if (bb[b + 1] < minY) minY = bb[b + 1];
             if (bb[b + 2] < minZ) minZ = bb[b + 2];
-            if (bb[b] > maxX) maxX = bb[b];
-            if (bb[b + 1] > maxY) maxY = bb[b + 1];
-            if (bb[b + 2] > maxZ) maxZ = bb[b + 2];
+            //The box's far corner, not its near one: measured from the near corner, the grid's own
+            //extent stopped at the largest triangle start instead of the largest triangle end, so
+            //the tallest part of any occluder sat outside the grid. A ray was then cut short at that
+            //wall by the slab test below and never reached those triangles at all, which is what
+            //made the cell walk disagree with walking every triangle near Ironforge.
+            if (bb[b + 3] > maxX) maxX = bb[b + 3];
+            if (bb[b + 4] > maxY) maxY = bb[b + 4];
+            if (bb[b + 5] > maxZ) maxZ = bb[b + 5];
         }
         if (covered == 0 || !(minX <= maxX) || !(minY <= maxY) || !(minZ <= maxZ)) return null;
         float ex = maxX - minX, ey = maxY - minY, ez = maxZ - minZ;
@@ -1089,18 +1094,20 @@ public sealed partial class GlViewport
 
         int x0 = 0, x1 = 0, y0 = 0, y1 = 0, z0 = 0, z1 = 0;
         var eps = cell * 1e-3f;
-        //The cells a triangle's own box touches. False when the box could not be measured at all,
-        //which puts the triangle in Wide: such a triangle reaches past the vertex array, and the ray
-        //test below throws it away just as the plain walk does.
+        //The cells a triangle's own box touches. The box is grown a hair on both sides, never only
+        //shifted: shifted, a box that sits just under a cell wall lost that wall's cell, and a ray
+        //that only crossed that cell then never saw the triangle at all - which is what made the
+        //grid disagree with walking every triangle near Ironforge, where the vertices sit on the
+        //third-unit lattice and land against the cell walls.
         bool CellsOf(int t)
         {
             var b = t * 6;
             if (b + 5 >= bb.Length || bb[b] > bb[b + 3]) return false;
-            x0 = Math.Clamp((int)Math.Floor((bb[b] + eps - minX) / cell), 0, dx - 1);
+            x0 = Math.Clamp((int)Math.Floor((bb[b] - eps - minX) / cell), 0, dx - 1);
             x1 = Math.Clamp((int)Math.Floor((bb[b + 3] + eps - minX) / cell), 0, dx - 1);
-            y0 = Math.Clamp((int)Math.Floor((bb[b + 1] + eps - minY) / cell), 0, dy - 1);
+            y0 = Math.Clamp((int)Math.Floor((bb[b + 1] - eps - minY) / cell), 0, dy - 1);
             y1 = Math.Clamp((int)Math.Floor((bb[b + 4] + eps - minY) / cell), 0, dy - 1);
-            z0 = Math.Clamp((int)Math.Floor((bb[b + 2] + eps - minZ) / cell), 0, dz - 1);
+            z0 = Math.Clamp((int)Math.Floor((bb[b + 2] - eps - minZ) / cell), 0, dz - 1);
             z1 = Math.Clamp((int)Math.Floor((bb[b + 5] + eps - minZ) / cell), 0, dz - 1);
             return true;
         }
