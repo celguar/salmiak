@@ -278,25 +278,52 @@ public sealed class AdtShadowInjector
     // when the proof fails, in which case the caller must use the full writer.
     public static byte[]? BakeShadowsForAdt(byte[] original, AdtFile edited)
     {
+        // The pristine file has to be parsed as well, not only for the proof: a chunk the bake
+        // left shadowless keeps its original MCSH payload, and unless those bits are overwritten
+        // with zeros the shadow of an object that was removed stays in game. AdtWriter.ShadowChanged
+        // counts that same case as a change ("a null map against a non-null original"), so keying
+        // it here keeps the shadow-only path equivalent to the full writer. Turtle-Wow tiles are a
+        // practical example: their ADTs already carry a full MCSH per chunk, so a cleared chunk is
+        // invisible to the editor but still shadowed in game until the zeros are written.
+        var source = ParseAdt(original);
+        var sourceByKey = new Dictionary<string, MapChunk>();
+        if (source != null)
+            for (int y = 0; y < AdtFile.ChunksPerSide; y++)
+                for (int x = 0; x < AdtFile.ChunksPerSide; x++)
+                {
+                    var sc = source.Chunks[y, x];
+                    if (sc != null) sourceByKey[$"{sc.IndexX}_{sc.IndexY}"] = sc;
+                }
+
         var packed = new Dictionary<string, byte[]>();
         for (int y = 0; y < AdtFile.ChunksPerSide; y++)
             for (int x = 0; x < AdtFile.ChunksPerSide; x++)
             {
                 var ch = edited.Chunks[y, x];
                 if (ch == null) continue;
-                if (ch.ShadowMap != null) packed[$"{ch.IndexX}_{ch.IndexY}"] = PackShadowBits(ch.ShadowMap);
-                else if (!ch.ShadowIsCleared()) packed[$"{ch.IndexX}_{ch.IndexY}"] = PackShadowBits(null);
+                var key = $"{ch.IndexX}_{ch.IndexY}";
+                if (ch.ShadowMap != null && !ch.ShadowIsCleared())
+                {
+                    packed[key] = PackShadowBits(ch.ShadowMap);
+                    continue;
+                }
+
+                // Nothing to draw here: erase the original bits, but only when the original had
+                // any, so a chunk that never had a shadow keeps its bytes untouched.
+                var prev = sourceByKey.TryGetValue(key, out var sp) ? sp : null;
+                if (prev != null && prev.ShadowTexelsSet() > 0) packed[key] = PackShadowBits(null);
             }
         if (packed.Count == 0) return null;
 
         var baked = Inject(original, packed);
         if (baked == null) return null;
-        // Everything but the shadow maps must survive untouched.
-        var pa = ParseAdt(original);
+        // Everything but the shadow maps must survive untouched, in both directions: the pristine
+        // file must agree with the edited tile too, so a shadow-only patch cannot be what carried
+        // an unrelated difference the writer path would have had to reproduce.
         var pb = ParseAdt(baked);
-        if (pa == null || pb == null) return null;
+        if (source == null || pb == null) return null;
         if (!pb.SameExceptShadows(edited)) return null;
-        if (!pa.SameExceptShadows(edited)) return null;
+        if (!source.SameExceptShadows(edited)) return null;
         return baked;
     }
 
