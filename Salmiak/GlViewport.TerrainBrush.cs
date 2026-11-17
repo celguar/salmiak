@@ -574,29 +574,6 @@ public sealed partial class GlViewport
             hyHi[i] = span.Hi;
         }
 
-        //TEMPORARY, one bake per session: the cell walk must decide the same thing as the plain walk.
-        //When it does not, dropping the grids of this bake keeps the shadows right, and the message
-        //says so rather than leaving a bake that quietly lost a shadow to be read as a bug.
-        if (ShadowGridCheck)
-        {
-            ShadowGridCheck = false;
-            var gridOk = CheckShadowGrids(wmoOcc, m2Occ, opt, maxDist);
-            if (gridOk == 2)
-            {
-                foreach (var lst in new[] { wmoOcc, m2Occ })
-                    foreach (var o in lst)
-                        o.Grid = null;
-                foreach (var t in wmoTpl.Values) t.Grid = null;
-                foreach (var t in m2Tpl.Values) t.Grid = null;
-                Notify?.Invoke("Shadow self-check: the triangle grid disagreed with the plain walk over the same triangles, " +
-                               "so the grids were dropped and this bake walks every triangle it is told about. The shadows are " +
-                               "the right ones either way, only slower.");
-            }
-            else if (gridOk == 0)
-                Notify?.Invoke("Shadow self-check: nothing testable in this bake, the grid walk was not compared. Report it only " +
-                               "as a note - the bake itself is unaffected.");
-        }
-
         foreach (var (adt, ch) in targets)
         {
             rec.Shadows[ch] = ch.ShadowMap != null ? (byte[])ch.ShadowMap.Clone() : null;
@@ -1245,87 +1222,6 @@ public sealed partial class GlViewport
             }
         if (samples == 0) return true;
         return solid * 100 >= samples * 3;
-    }
-
-    //TEMPORARY, one bake per session: does the cell walk agree with walking every triangle? A ray is
-    //aimed at one of the geometry's own triangles from a point outside its box, in both directions,
-    //so the ray has to cross the box slab, the cells and, for the triangles the grid could not hold,
-    //the aside list. The very same ray is then run against a copy of that placement whose triangles
-    //are simply walked. Both must call the ray occluding or not, since only that verdict is what the
-    //bake reads. A ray the plain walk cannot make hit either is not a test at all, so it is left out
-    //until enough of the ones that do hit have been tried. 0 = nothing testable, 1 = agreed,
-    //2 = disagreed.
-    private bool ShadowGridCheck = true;
-    private int CheckShadowGrids(List<ShadowOcc> w, List<ShadowOcc> m, ShadowOpt opt, float maxDist)
-    {
-        var seed = 0x2545F491u;
-        double Rnd()
-        {
-            seed = seed * 1664525u + 1013904223u;
-            return (seed >> 8) * (1d / 16777216d);
-        }
-
-        var tried = 0;
-        var mismatch = 0;
-        foreach (var lst in new[] { w, m })
-            foreach (var occ in lst)
-            {
-                if (occ.Grid == null || occ.Idx.Length < 9) continue;
-                //The placement walked twice: once with its grid, once with none.
-                var plain = new ShadowOcc { W = occ.W, WC = occ.WC, WR = occ.WR, Scale = occ.Scale,
-                                            Inv = occ.Inv, V = occ.V, Idx = occ.Idx, Stride = occ.Stride,
-                                            Ranges = occ.Ranges, BBox = occ.BBox, WB = occ.WB, LB = occ.LB };
-                var toWorld = occ.Inv.Inverted();
-                var lb = occ.LB;
-                float diag = lb.Length >= 6 ? new Vector3(lb[3] - lb[0], lb[4] - lb[1], lb[5] - lb[2]).Length : 1f;
-                float scale = Math.Abs(occ.Scale) < 1e-4f ? 1f : Math.Abs(occ.Scale);
-                //Far enough out that the box slab matters, never past the reach a bake would give.
-                float spread = Math.Max(1f, diag) * 0.5f + maxDist / scale * 0.45f;
-                var v = occ.V;
-                var idx = occ.Idx;
-                int stride = occ.Stride;
-                int nTri = idx.Length / 3;
-
-                for (int k = 0; k < 8; k++)
-                {
-                    var ii = ((int)(Rnd() * nTri) % nTri) * 3;
-                    if (ii + 2 >= idx.Length) continue;
-                    int o0 = (int)idx[ii] * stride, o1 = (int)idx[ii + 1] * stride, o2 = (int)idx[ii + 2] * stride;
-                    if (o2 + 2 >= v.Length) continue;
-                    //The triangle's own centre, and a start point on a random side of it.
-                    var at = new Vector3((v[o0] + v[o1] + v[o2]) / 3f,
-                                         (v[o0 + 1] + v[o1 + 1] + v[o2 + 1]) / 3f,
-                                         (v[o0 + 2] + v[o1 + 2] + v[o2 + 2]) / 3f);
-                    var off = new Vector3((float)(Rnd() * 2d - 1d), (float)(Rnd() * 2d - 1d), (float)(Rnd() * 2d - 1d));
-                    if (off.Length < 1e-3f) off = new Vector3(1f, 0f, 0f);
-                    off = Vector3.Normalize(off) * spread;
-                    if (k >= 4) off = -off;
-                    var from = at - off;
-                    var dir = at - from;
-                    if (dir.Length < 1e-4f) continue;
-                    dir = Vector3.Normalize(dir);
-
-                    var origin = Vector3.TransformPosition(from, toWorld);
-                    var sun = Vector3.Normalize(Vector3.TransformVector(dir, toWorld));
-                    //The world point has to come back to the local one it was built from, or the ray
-                    //below would be aimed at nothing and the check would test nothing.
-                    var back = Vector3.TransformPosition(origin, occ.Inv);
-                    if (new Vector3(back.X - from.X, back.Y - from.Y, back.Z - from.Z).Length > 0.02f * (1f + Math.Abs(from.Length))) continue;
-                    float dPlain, dGrid;
-                    var hitPlain = RayOccludes(opt, plain, origin, sun, maxDist, true, out dPlain);
-                    var hitGrid = RayOccludes(opt, occ, origin, sun, maxDist, true, out dGrid);
-                    //A ray that only grazes the end of its reach is not a fair test either.
-                    if (hitPlain && dPlain > maxDist * 0.9f) continue;
-                    if (hitGrid && dGrid > maxDist * 0.9f) continue;
-                    if (hitPlain || hitGrid)
-                    {
-                        tried++;
-                        if (hitPlain != hitGrid) mismatch++;
-                    }
-                    if (tried >= 4000 || mismatch > 0) return mismatch > 0 ? 2 : 1;
-                }
-            }
-        return tried >= 50 ? 1 : 0;
     }
 
     private bool SunRayOccluded(ShadowOpt opt, Vector3 origin, Vector3 dir, float maxDist,
