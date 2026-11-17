@@ -86,7 +86,10 @@ public sealed class TextOverlay : IDisposable
             uniform int uUseTex;
             out vec4 FragColor;
             void main() {
-                if (uUseTex == 2) { FragColor = vec4(texture(uTex, vUV).rgb, uColor.a); return; }
+                //A picture's own alpha is kept, so art that fades to nothing shows the loading screen
+                //behind it rather than the square of black that its unwritten pixels would be; where a
+                //picture is solid this changes nothing, and uColor still sets the overall opacity.
+                if (uUseTex == 2) { FragColor = texture(uTex, vUV) * uColor; return; }
                 FragColor = uColor;
             }
             """;

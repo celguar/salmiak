@@ -75,18 +75,29 @@ public sealed class WmoRenderer : IDisposable
         return true;
     }
 
-    public void Load(IEnumerable<AdtFile> adts, TextureCache tex)
+    //The load is budgeted the way terrain meshing is: only maxNew WMO roots are opened and
+    //uploaded in one call, and whatever is still waiting is handed back, so a whole map's
+    //buildings come in a few roots per rendered frame instead of in one frozen breath.
+    //Cached roots are free on every later call, which is what lets the view be reloaded
+    //frame after frame until nothing is left waiting.
+    public int Load(IEnumerable<AdtFile> adts, TextureCache tex, int maxNew = int.MaxValue)
     {
         _tex = tex;
         if (_shader == 0) CreateShader();
         _instances.Clear();
         _instanceIndex.Clear();
 
+        int fresh = 0, pending = 0;
         foreach (var adt in adts)
         for (int i = 0; i < adt.Wmos.Count; i++)
         {
             var w = adt.Wmos[i];
             if (string.IsNullOrEmpty(w.ModelPath)) continue;
+            if (!_models.ContainsKey(w.ModelPath))
+            {
+                if (fresh >= maxNew) { pending++; continue; }
+                fresh++;
+            }
             var wmo = GetWmo(w.ModelPath);
             if (wmo == null) continue;
             var transform = BuildTransform(w);
@@ -94,6 +105,7 @@ public sealed class WmoRenderer : IDisposable
             _instances.Add(new Instance { Wmo = wmo, Transform = transform, Adt = adt, Index = i });
             EmitInteriorDoodads(wmo.Root, w.DoodadSet, transform);
         }
+        return pending;
     }
 
     private void EmitInteriorDoodads(WmoFile.Root root, int doodadSet, Matrix4 wmoTransform)

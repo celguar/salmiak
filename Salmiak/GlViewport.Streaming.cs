@@ -71,6 +71,125 @@ public sealed partial class GlViewport
         LoadingChanged?.Invoke(v);
     }
 
+    //A cold load is the app opening or a map being switched: none of this view is drawn yet and
+    //the archives still have to hand over their tiles, their WMOs and their models, which reads as
+    //the window hanging for a few seconds. Until that work runs out, the client's loading screen
+    //stands in for the scene and its bar walks whatever is still left waiting in the view, so the
+    //bar answers for the loader rather than for a guess at how long a map takes. Travelling later
+    //reaches new tiles one at a time and is not a cold load, so it never pulls the screen back up.
+    private LoadingScreen? _loadScreen;
+    private volatile bool _coldLoad;
+    private int _coldSeen;
+    private float _coldShown;
+    private int _objectsPending;
+    private long _coldStartMs;
+
+    //A map made of one huge building has no tiles to wait for, so its cold load has nothing to count:
+    //the screen is then held for this long instead, and its bar walks the time rather than the work.
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public int WmoSceneColdLoadMillis { get; set; } = 1000;
+
+    private int _coldMinMillis;
+
+    public event Action<int, int>? LoadProgress;
+
+    [System.ComponentModel.DesignerSerializationVisibility(System.ComponentModel.DesignerSerializationVisibility.Hidden)]
+    public int WmoBuildBudget { get; set; } = 8;
+
+    //How many of the tiles this view wants the archive thread has not handed over yet.
+    private int MissingTiles((int X, int Y) center)
+    {
+        if (_wdt == null) return 0;
+        int r = LoadRadius, n = 0;
+        for (int ty = center.Y - r; ty <= center.Y + r; ty++)
+        for (int tx = center.X - r; tx <= center.X + r; tx++)
+        {
+            if (tx < 0 || tx >= WdtFile.GridSize || ty < 0 || ty >= WdtFile.GridSize) continue;
+            if (!_wdt.TileExists[ty, tx]) continue;
+            if (!_tileCache.ContainsKey((tx, ty))) n++;
+        }
+        return n;
+    }
+
+    private void BeginColdLoad(string mapName, int minMillis = 0)
+    {
+        _coldLoad = true;
+        _coldSeen = 0;
+        _coldShown = 0f;
+        _objectsPending = 0;
+        _coldMinMillis = Math.Max(0, minMillis);
+        _coldStartMs = _sw.ElapsedMilliseconds;
+        _loadScreen = null;
+        if (_text == null || _texCache == null || _mpq == null) return;
+        _loadScreen = new LoadingScreen(_text, _texCache, _mpq);
+        _loadScreen.Enable(mapName);
+
+        //What the tables gave is said out loud, so a map that came out with another map's picture can be
+        //read off the status bar against its own row of Map.dbc rather than guessed at. Where the chain
+        //named a file these archives do not hold, that is said too, since the client's own fallback
+        //picture otherwise looks like the map's screen.
+        if (!_loadScreen.ArtFound)
+            Notify?.Invoke(_loadScreen.ArtAsked.Length > 0
+                ? $"Map.dbc names {_loadScreen.ArtAsked} for this map and the archives do not hold it; drawing a plain bar."
+                : "Map.dbc names no loading screen for this map; drawing a plain bar.");
+        else if (_loadScreen.ArtFallback && _loadScreen.ArtMissing)
+            Notify?.Invoke($"Loading screen: the client's own picture - Map.dbc named {_loadScreen.ArtAsked} for this map and the archives do not hold it.");
+        else if (_loadScreen.ArtFallback)
+            Notify?.Invoke($"Loading screen: the client's own picture - Map.dbc names no screen for this map.");
+        else Notify?.Invoke($"Loading screen: {System.IO.Path.GetFileName(_loadScreen.ArtPath)}");
+    }
+
+    //How long this cold load is being held up for, in ms.
+    private long ColdLoadMillis() => _sw.ElapsedMilliseconds - _coldStartMs;
+
+    //The bar only ever moves forward: the work still waiting is counted as items - tiles the
+    //archive thread has not unpacked, chunk meshes still to build, WMO roots still to upload and
+    //doodad models still to build - and the largest such count seen so far is what a full bar
+    //means, so a phase that only shows up once the tiles behind it arrive cannot drag it back.
+    //Where the count runs out before the hold does, the bar walks the time instead, which is what
+    //a single huge building needs: it arrives in one go, and a bar that filled on the first frame
+    //would leave nothing to look at.
+    private void StepColdLoad(int tilesMissing, int meshesPending, int objectsPending, int modelsQueued)
+    {
+        if (!_coldLoad) return;
+        int left = tilesMissing + meshesPending + objectsPending + modelsQueued;
+        if (left > _coldSeen) _coldSeen = left;
+
+        long elapsed = ColdLoadMillis();
+        if (left <= 0 && elapsed >= _coldMinMillis) { EndColdLoad(); return; }
+
+        float work = _coldSeen > 0 ? 1f - (float)left / _coldSeen : 0f;
+        float timed = _coldMinMillis > 0 ? Math.Min(1f, elapsed / (float)_coldMinMillis) : 0f;
+        float ratio = Math.Max(work, timed);
+        if (ratio <= _coldShown) return;
+        _coldShown = ratio;
+        _loadScreen?.UpdateProgress(ratio);
+        LoadProgress?.Invoke((int)Math.Round(ratio * 100f), 100);
+    }
+
+    //A map that is one building has no tiles and no archive thread, so the streaming step that
+    //drives the bar never runs for it: this counts what it can - the building's own interior models -
+    //and lets the rest of the hold be told by the clock.
+    private void StepWmoColdLoad()
+    {
+        if (!_coldLoad || !WmoOnly) return;
+        StepColdLoad(0, 0, 0, _doodads?.ModelsQueued ?? 0);
+    }
+
+    //The view is whole: the bar is filled and left up for the frame that found it so, and the
+    //next one hands the window over to the scene.
+    private void EndColdLoad()
+    {
+        _coldLoad = false;
+
+        //A map that is one building has no archive thread left to turn the indicator off later, so
+        //this is where it goes off; a streamed map keeps its own thread answering for it.
+        if (_wdt == null) SetLoading(false);
+
+        _loadScreen?.SetLoaded();
+        LoadProgress?.Invoke(100, 100);
+    }
+
     private static int Pack(int x, int y) => ((x & 0xFFFF) << 16) | (y & 0xFFFF);
     private static (int X, int Y) Unpack(int p) => ((short)(p >> 16), (short)(p & 0xFFFF));
 
@@ -117,6 +236,7 @@ public sealed partial class GlViewport
         _tilesDirty = false;
         SetLoading(true);
         StartWorker();
+        BeginColdLoad(mapName);
     }
 
     private void UpdateStreaming()
@@ -131,11 +251,11 @@ public sealed partial class GlViewport
         bool nearEdge = !first &&
             Math.Max(Math.Abs(t.X - _builtTile.X), Math.Abs(t.Y - _builtTile.Y)) > trigger;
 
-        bool newWork = first || nearEdge || _tilesDirty;
+        bool newWork = first || nearEdge || _tilesDirty || _objectsPending > 0;
 
         (int X, int Y) center;
         if (first || nearEdge)            center = t;
-        else if (_tilesDirty || _buildPending) center = _builtTile;
+        else if (_tilesDirty || _buildPending || _objectsPending > 0 || _coldLoad) center = _builtTile;
         else return;
 
         _tilesDirty = false;
@@ -158,14 +278,20 @@ public sealed partial class GlViewport
         int pending = _terrain.SetVisible(order, _texCache, Math.Max(1, TileBuildBudget));
         _buildPending = pending > 0;
 
+        //Buildings come in on the same budget the terrain meshes are built on, so a whole map's
+        //WMOs are opened a few roots a frame rather than in one frozen breath: the frame keeps
+        //drawing while they arrive, and whatever is left waiting keeps the cold load going.
         if (!_buildPending && _objectsDirty)
         {
             if (_doodads != null && _texCache != null) _doodads.Load(order, _texCache);
-            if (_wmos != null && _texCache != null) _wmos.Load(order, _texCache);
-            _objectsDirty = false;
+            _objectsPending = _wmos != null && _texCache != null
+                ? _wmos.Load(order, _texCache, Math.Max(1, WmoBuildBudget)) : 0;
+            _objectsDirty = _objectsPending > 0;
         }
 
         SetTileCount(order.Count);
+        StepColdLoad(MissingTiles(center), pending, _objectsPending,
+            _doodads?.ModelsQueued ?? 0);
     }
 
     private void StartWorker()

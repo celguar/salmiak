@@ -53,6 +53,7 @@ public sealed partial class GlViewport
         var dpi = System.Windows.Media.VisualTreeHelper.GetDpi(this);
         _dpiX = dpi.DpiScaleX; _dpiY = dpi.DpiScaleY;
         if (_pendingStream is { } ps) { _pendingStream = null; StreamMap(ps.Wdt, ps.Name); }
+        if (_pendingWmoScene is { } pw) { _pendingWmoScene = null; LoadGlobalWmo(pw.Wdt, pw.Name); }
         PollMouse();
         //Shadow bake: walk the pending ray job a slice per rendered frame, which keeps the window
         //drawing (and the sidebar progress bar moving) while thousands of texels are being tested.
@@ -97,11 +98,25 @@ public sealed partial class GlViewport
         if (active && (EditMode || TextureMode) && !DoodadMode && !WmoMode && !_blendMode && !GenerateMode &&
             !_areaMode && !_hmPlacing && !BakeChunksMode && _lmb) EditStep(dt);
         UpdateStreaming();
+        StepWmoColdLoad();
 
         if (_doodads != null && _doodads.DrainReady() > 0) RefreshPlacements();
         DrainMinimap();
 
         GL.Clear(ClearBufferMask.ColorBufferBit | ClearBufferMask.DepthBufferBit);
+
+        //Cold load: the world is not whole yet, so the client's loading screen stands in for the
+        //scene rather than half a continent being drawn over a stutter. The frame that finds the
+        //work done still draws the filled bar, and the one after it hands the window over to the
+        //scene, so the bar is always seen full once instead of jumping out of existence.
+        if (_loadScreen != null && _loadScreen.IsActive)
+        {
+            _loadScreen.Render(Width, Height);
+            DrawOverlay();
+            if (!_coldLoad) _loadScreen.Disable();
+            CameraUpdated?.Invoke(_camera.Position);
+            return;
+        }
 
         float aspect = Width > 0 && Height > 0 ? (float)Width / Height : 1f;
         if (_doodads != null) { _doodads.Highlight = DoodadMode; _doodads.AnimateDoodads = DoodadAnimation; }

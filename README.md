@@ -83,3 +83,4 @@
 * **Doodad animation on / off** `[V]`.
 * **Undo** `[Ctrl+Z]` / **redo** `[Ctrl+Y]`, **screenshot to clipboard** `[Ctrl+Shift+P]`, **full key sheet** `[F1]`.
 * **Custom MPQ reader;** load / unload archives, and the database connection panel (File menu).
+* **Loading screen:** opening the app or choosing another map spends a few seconds bringing a whole map out of the archives, and while that work is still waiting the client's own loading screen is drawn over the viewport instead of the half-built world.

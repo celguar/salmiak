@@ -44,6 +44,11 @@ public partial class MainWindow : Window
         _viewport.LoadingChanged += loading =>
             Dispatcher.Invoke(() => LoadingText.Visibility =
                 loading ? Visibility.Visible : Visibility.Collapsed);
+        //A cold load is counted, not guessed at, so the bar the viewport is drawing and this
+        //readout agree: the percent says how much of the view has arrived, which is what tells the
+        //user the app is still opening rather than sitting still on a half-built map.
+        _viewport.LoadProgress += (done, total) => Dispatcher.Invoke(() =>
+            LoadingText.Text = total > 0 ? $"Loading {done}%" : "Loading tiles...");
         _viewport.HudChanged += UpdateHud;
         _viewport.ModeChanged += _ => Dispatcher.Invoke(RefreshToolbar);
         _viewport.HelpToggled += () => Dispatcher.Invoke(ToggleHelp);

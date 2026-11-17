@@ -169,6 +169,10 @@ public sealed class DoodadRenderer : IDisposable
 
     public float RenderDistance { get; set; } = 450f;
 
+    //How much of the model work this view still has waiting: queued on the loader thread plus the
+    //built models on their way back to the frame, which is what a loading screen counts.
+    public int ModelsQueued => _loadQueue.Count + _ready.Count;
+
     private readonly HashSet<(AdtFile, int)> _selected = new();
 
     public void SetSelection(IEnumerable<(AdtFile Adt, int Index)> selection)

@@ -44,9 +44,17 @@ public sealed partial class GlViewport
 
     public void LoadGlobalWmo(WdtFile wdt, string mapName)
     {
-        if (!IsHandleCreated || wdt.GlobalWmoDef is not { } def) return;
+        if (wdt.GlobalWmoDef is not { } def) return;
+
+        //The map list is filled in before the window has a render handle, and there is nothing to
+        //attach a single building to until there is, so the request waits for the first rendered
+        //frame the way a streamed map's request does.
+        if (!IsHandleCreated) { _pendingWmoScene = (wdt, mapName); return; }
         LoadWmoScene(def, mapName);
     }
+
+    //What a map that is one building asked for before the handle existed.
+    private (WdtFile Wdt, string Name)? _pendingWmoScene;
 
     private void LoadWmoScene(WmoDef def, string mapName)
     {
@@ -61,7 +69,13 @@ public sealed partial class GlViewport
         _tileCache = new();
         _terrain?.Dispose();
         _terrain = new TerrainRenderer();
-        SetLoading(false);
+
+        //A map that is one building is opened in one go rather than streamed, which is a stutter
+        //rather than a load. The cold load is started here and held for its own moment: there are no
+        //tiles left to wait for, so the screen is kept up for that long and its bar walks the clock
+        //while the building's models come in, rather than the window freezing and handing over.
+        SetLoading(true);
+        BeginColdLoad(mapName, WmoSceneColdLoadMillis);
 
         var holder = new AdtFile();
         holder.Wmos.Add(def);
